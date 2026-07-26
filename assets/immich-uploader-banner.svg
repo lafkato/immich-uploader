@@ -1,0 +1,39 @@
+<svg width="1280" height="420" viewBox="0 0 1280 420" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Immich Uploader</title>
+  <desc id="desc">A modern illustration of photos uploading to Immich.</desc>
+  <defs>
+    <linearGradient id="background" x1="40" y1="12" x2="1230" y2="410" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102A43"/>
+      <stop offset="1" stop-color="#163E4A"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="760" y1="78" x2="1130" y2="340" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#31D4A8"/>
+      <stop offset="1" stop-color="#18A8D8"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#001B2E" flood-opacity=".35"/></filter>
+  </defs>
+  <rect width="1280" height="420" rx="28" fill="url(#background)"/>
+  <circle cx="1098" cy="-12" r="262" fill="#2CC79C" opacity=".12"/>
+  <circle cx="128" cy="396" r="170" fill="#188ED8" opacity=".12"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <text x="86" y="142" fill="white" font-size="56" font-weight="700">Immich Uploader</text>
+    <text x="90" y="193" fill="#B7D8DF" font-size="24">Your photos. Automatically backed up.</text>
+    <rect x="88" y="235" width="214" height="46" rx="23" fill="#27C59D"/>
+    <text x="116" y="266" fill="#062B35" font-size="18" font-weight="700">Windows • Immich</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="770" y="88" width="196" height="230" rx="20" fill="#F4F9FA" transform="rotate(-8 770 88)"/>
+    <rect x="790" y="111" width="156" height="146" rx="13" fill="#A9E0D0"/>
+    <path d="M790 223L837 174L870 207L901 161L946 223V257H790V223Z" fill="#278E9B"/>
+    <circle cx="910" cy="146" r="15" fill="#F8D875"/>
+    <rect x="987" y="111" width="197" height="230" rx="20" fill="white" transform="rotate(8 987 111)"/>
+    <rect x="1007" y="134" width="157" height="147" rx="13" fill="#B9D8F4"/>
+    <path d="M1007 247L1050 194L1082 224L1118 175L1164 247V281H1007V247Z" fill="#3479AD"/>
+    <circle cx="1129" cy="165" r="15" fill="#FFD06B"/>
+  </g>
+  <g transform="translate(915 44)">
+    <circle cx="54" cy="54" r="54" fill="url(#accent)"/>
+    <path d="M54 26V73M54 73L35 55M54 73L73 55" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M29 80V91C29 96.523 33.477 101 39 101H69C74.523 101 79 96.523 79 91V80" stroke="white" stroke-width="8" stroke-linecap="round"/>
+  </g>
+</svg>
