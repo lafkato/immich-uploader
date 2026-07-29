@@ -1,4 +1,5 @@
-; Build with Inno Setup 6 after publishing the application to publish\release.
+; Build with Inno Setup 6 after publishing the application to publish\release:
+; dotnet publish src\ImmichUploaderApp\ImmichUploaderApp.csproj -c Release -o publish\release
 #define MyAppName "Immich Uploader"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "lafkato"
@@ -22,7 +23,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile=..\LICENSE
 
 [Files]
-Source: "..\publish\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\publish\release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

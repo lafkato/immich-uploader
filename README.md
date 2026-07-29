@@ -25,6 +25,9 @@
 > [!TIP]
 > Sovellus on self-contained: erillistä .NET-asennusta ei tarvita.
 
+> [!NOTE]
+> Julkaisu rakennetaan self-contained-kansioksi pakatun yhden `.exe`-tiedoston sijaan. Tämä pitää runtime-tiedostot läpinäkyvinä ja vähentää virustorjunnan heuristiikkaosumia.
+
 ### Ominaisuudet
 
 - Automaattinen kuvien ja videoiden lataus valituista kansioista
@@ -32,6 +35,14 @@
 - Päällekkäisten latausten esto, tiedoston valmiustarkistus ja automaattiset uudelleenyritykset
 - Suomen, englannin, ruotsin ja saksan kielet sekä vaalea/tumma ulkoasu
 - API-avain suojataan Windowsin DPAPI-salauksella
+
+### Julkaisun rakentaminen
+
+```powershell
+dotnet publish src\ImmichUploaderApp\ImmichUploaderApp.csproj -c Release -o publish\release
+```
+
+Asennuspaketti tehdään Inno Setup 6:lla tiedostosta `installer\ImmichUploader.iss`. Asennuspaketti ottaa mukaan koko `publish\release`-kansion.
 
 ### Tue kehitystä ☕
 
@@ -60,6 +71,9 @@ Sovellus tallentaa asetukset ja lataushistorian Windows-käyttäjäprofiiliisi. 
 > [!TIP]
 > The app is self-contained — no separate .NET installation is required.
 
+> [!NOTE]
+> Releases are built as a self-contained folder instead of a packed single `.exe`. This keeps runtime files transparent and reduces false-positive antivirus heuristics.
+
 ### Highlights
 
 - Automatic photo and video uploads from selected folders
@@ -67,6 +81,14 @@ Sovellus tallentaa asetukset ja lataushistorian Windows-käyttäjäprofiiliisi. 
 - Duplicate prevention, file-stability checks, and automatic retries
 - Finnish, English, Swedish, and German interfaces with light and dark themes
 - Your API key is protected with Windows DPAPI encryption
+
+### Release build
+
+```powershell
+dotnet publish src\ImmichUploaderApp\ImmichUploaderApp.csproj -c Release -o publish\release
+```
+
+Build the installer with Inno Setup 6 from `installer\ImmichUploader.iss`. The installer includes the whole `publish\release` folder.
 
 ### Support development ☕
 
