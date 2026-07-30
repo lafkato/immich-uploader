@@ -1,0 +1,48 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Derive version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build and run smoke tests
+        run: |
+          dotnet build ImmichUploaderApp.sln -c Release
+          dotnet run --project tests\ImmichUploaderApp.SmokeTests\ImmichUploaderApp.SmokeTests.csproj -c Release
+
+      - name: Publish application
+        run: dotnet publish src\ImmichUploaderApp\ImmichUploaderApp.csproj -c Release -o publish\release
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.version.outputs.version }} installer\ImmichUploader.iss
+        shell: pwsh
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist\ImmichUploaderSetup-${{ steps.version.outputs.version }}.exe
+          generate_release_notes: true

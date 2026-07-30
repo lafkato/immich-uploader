@@ -1,7 +1,9 @@
 ; Build with Inno Setup 6 after publishing the application to publish\release:
 ; dotnet publish src\ImmichUploaderApp\ImmichUploaderApp.csproj -c Release -o publish\release
 #define MyAppName "Immich Uploader"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 #define MyAppPublisher "lafkato"
 #define MyAppExeName "ImmichUploader.exe"
 
@@ -10,6 +12,7 @@ AppId={{A9CBA759-8C30-42B7-A6CD-079BAA68F080}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppMutex=Local\ImmichUploaderApp_SingleInstance_9F3D2C11
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
@@ -21,6 +24,8 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile=..\LICENSE
+CloseApplications=yes
+RestartApplications=yes
 
 [Files]
 Source: "..\publish\release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
