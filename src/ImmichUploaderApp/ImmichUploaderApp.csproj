@@ -10,7 +10,7 @@
     <RootNamespace>ImmichUploaderApp</RootNamespace>
     <!-- Overridden at release build time via -p:Version=X.Y.Z from the same git tag that
          drives the Inno Setup installer version (see release.yml / ImmichUploader.iss). -->
-    <Version>1.0.5</Version>
+    <Version>1.1.0</Version>
     <ApplicationIcon>Resources\icon.ico</ApplicationIcon>
 
     <!-- Publish: self-contained folder deployment, no separate .NET runtime install needed.
@@ -27,5 +27,9 @@
     <EnableCompressionInSingleFile Condition="'$(EnableCompressionInSingleFile)' == ''">false</EnableCompressionInSingleFile>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+  </ItemGroup>
 
 </Project>

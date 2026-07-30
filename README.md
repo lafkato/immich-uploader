@@ -31,10 +31,22 @@
 ### Ominaisuudet
 
 - Automaattinen kuvien ja videoiden lataus valituista kansioista
+- Kaksisuuntainen synkronointi: peilaa koko Immich-kirjastosi (tai osan siitä) paikalliseen kansioon kevyenä esikatseluna tai täysikokoisina tiedostoina - katso tarkemmin alta
 - Albumin valinta, kansioiden poissulku sekä Windowsin käynnistyksen yhteydessä avautuminen
 - Päällekkäisten latausten esto, tiedoston valmiustarkistus ja automaattiset uudelleenyritykset
 - Suomen, englannin, ruotsin ja saksan kielet sekä vaalea/tumma ulkoasu
+- Manuaalinen päivitystarkastus ja -asennus suoraan asetuksista
 - API-avain suojataan Windowsin DPAPI-salauksella
+
+### Kuvien ja videoiden lataus Immichistä
+
+Lataussuunta toimii myös toisin päin: Immich Uploader voi peilata koko Immich-kirjastosi paikalliseen kansioon, samaan tapaan kuin Google Drive, OneDrive tai iCloud synkronoivat pilvitiedostoja koneellesi. Ota käyttöön asetusten Lataukset-välilehdeltä:
+
+- Erilliset kohdekansiot kuville ja videoille
+- Kevyt tila lataa pienet esikatselukuvat; täysi koko lataa alkuperäiset tiedostot. Videot ladataan aina alkuperäisenä, koska Immichillä ei ole kevyttä videoesikatselua
+- Kansiot voi järjestää joko kuukauden tai Immich-albumin mukaan
+- Valinnainen kaksisuuntainen poistosynkronointi: paikallisesti poistetun tiedoston voi siirtää roskakoriin myös Immichissä, ja Immichistä poistetut kuvat katoavat automaattisesti paikallisesti
+- Sama kansio voi turvallisesti olla sekä tarkkailtava (lataus Immichiin) että ladattava (lataus Immichistä) kansio - sovellus ei koskaan lataa itse lataamaansa tiedostoa takaisin Immichiin
 
 ### Julkaisun rakentaminen
 
@@ -77,10 +89,22 @@ Sovellus tallentaa asetukset ja lataushistorian Windows-käyttäjäprofiiliisi. 
 ### Highlights
 
 - Automatic photo and video uploads from selected folders
+- Two-way sync: mirror your whole Immich library (or part of it) to a local folder, as lightweight previews or full-size originals - see below
 - Album selection, folder exclusions, and optional start with Windows
 - Duplicate prevention, file-stability checks, and automatic retries
 - Finnish, English, Swedish, and German interfaces with light and dark themes
+- Manual update check and one-click install from Settings
 - Your API key is protected with Windows DPAPI encryption
+
+### Downloading photos and videos from Immich
+
+The upload direction also works in reverse: Immich Uploader can mirror your whole Immich library to a local folder, the same way Google Drive, OneDrive, or iCloud sync cloud files to your computer. Enable it from the Downloads tab in Settings:
+
+- Separate destination folders for photos and videos
+- Lightweight mode downloads small preview images; full size downloads the original files. Videos always download at full size, since Immich has no lightweight video preview
+- Folders can be organized by month or by Immich album
+- Optional two-way delete sync: a locally deleted file can be trashed on the Immich side too, and photos deleted from Immich disappear locally on the next scan
+- The same folder can safely be both watched (uploaded to Immich) and downloaded to (from Immich) - the app never re-uploads a file it just downloaded itself
 
 ### Release build
 

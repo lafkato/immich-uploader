@@ -140,6 +140,37 @@ public sealed class ImmichClient : IDisposable
         return created.Id;
     }
 
+    /// The plain album list (GetAlbumsAsync) doesn't include membership, and - verified against
+    /// a live server - GET /albums/{id} never includes an "assets" array either (only
+    /// assetCount), regardless of a withoutAssets query param. The actual working way to list an
+    /// album's assets is POST /search/metadata with an albumIds filter, paginated the same way
+    /// as GetAssetsPageAsync.
+    public async Task<IReadOnlyList<string>> GetAlbumAssetIdsAsync(string albumId, CancellationToken ct = default)
+    {
+        var ids = new List<string>();
+        var page = 1;
+        while (true)
+        {
+            using var response = await _http.PostAsJsonAsync("search/metadata",
+                new { page, size = 1000, albumIds = new[] { albumId } }, JsonOptions, ct);
+            var body = await response.Content.ReadAsStringAsync(ct);
+            if (!response.IsSuccessStatusCode)
+                throw new ImmichApiException($"POST /search/metadata (albumIds) epaonnistui ({(int)response.StatusCode} {response.StatusCode}): {body}", response.StatusCode);
+
+            using var doc = JsonDocument.Parse(body);
+            var assetsElement = doc.RootElement.GetProperty("assets");
+            foreach (var item in assetsElement.GetProperty("items").EnumerateArray())
+            {
+                if (item.TryGetProperty("id", out var idElement) && idElement.GetString() is { } id) ids.Add(id);
+            }
+
+            var hasMore = assetsElement.TryGetProperty("nextPage", out var nextPageElement) && nextPageElement.ValueKind != JsonValueKind.Null;
+            if (!hasMore) break;
+            page++;
+        }
+        return ids;
+    }
+
     public async Task AddAssetToAlbumAsync(string albumId, string assetId, CancellationToken ct = default)
     {
         using var response = await _http.PutAsJsonAsync($"albums/{albumId}/assets", new { ids = new[] { assetId } }, JsonOptions, ct);
@@ -166,6 +197,74 @@ public sealed class ImmichClient : IDisposable
         var result = JsonSerializer.Deserialize<ServerStorageStats>(body, JsonOptions);
         if (result is null) throw new ImmichApiException("GET /server/storage: tyhja vastaus palvelimelta");
         return result;
+    }
+
+    /// <summary>Pages through the whole library (1-based page numbers). Immich replaced the old
+    /// GET /assets listing with POST /search/metadata at some point - verified against a live
+    /// v3.1.0 server, where GET /assets now 404s but this endpoint works.</summary>
+    public async Task<(IReadOnlyList<AssetSummary> Items, bool HasMore)> GetAssetsPageAsync(int page, int pageSize, CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsJsonAsync("search/metadata", new { page, size = pageSize }, JsonOptions, ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+            throw new ImmichApiException($"POST /search/metadata epaonnistui ({(int)response.StatusCode} {response.StatusCode}): {body}", response.StatusCode);
+
+        using var doc = JsonDocument.Parse(body);
+        var assetsElement = doc.RootElement.GetProperty("assets");
+        var items = JsonSerializer.Deserialize<List<AssetSummary>>(assetsElement.GetProperty("items").GetRawText(), JsonOptions) ?? new List<AssetSummary>();
+        var hasMore = assetsElement.TryGetProperty("nextPage", out var nextPageEl) && nextPageEl.ValueKind != JsonValueKind.Null;
+        return (items, hasMore);
+    }
+
+    public Task DownloadOriginalAsync(string assetId, string destinationPath, CancellationToken ct = default) =>
+        DownloadAssetFileAsync($"assets/{assetId}/original", destinationPath, ct);
+
+    public Task DownloadThumbnailAsync(string assetId, string destinationPath, CancellationToken ct = default) =>
+        DownloadAssetFileAsync($"assets/{assetId}/thumbnail", destinationPath, ct);
+
+    /// <summary>In-memory variant used only to build the small activity-panel preview image for
+    /// videos, whose downloaded original obviously can't be decoded as a still frame - Immich's
+    /// thumbnail endpoint returns a real preview image for video assets too, we just don't want
+    /// it as the synced file itself (see PhotoSyncService's effectiveMode).</summary>
+    public async Task<byte[]> DownloadThumbnailBytesAsync(string assetId, CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync($"assets/{assetId}/thumbnail", ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            throw new ImmichApiException($"GET /assets/{assetId}/thumbnail epaonnistui ({(int)response.StatusCode} {response.StatusCode}): {body}", response.StatusCode);
+        }
+        return await response.Content.ReadAsByteArrayAsync(ct);
+    }
+
+    private async Task DownloadAssetFileAsync(string requestUri, string destinationPath, CancellationToken ct)
+    {
+        using var response = await _http.GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            throw new ImmichApiException($"GET /{requestUri} epaonnistui ({(int)response.StatusCode} {response.StatusCode}): {body}", response.StatusCode);
+        }
+
+        await using var httpStream = await response.Content.ReadAsStreamAsync(ct);
+        await using var fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true);
+        await httpStream.CopyToAsync(fileStream, ct);
+    }
+
+    /// <summary>Moves assets to Immich's trash (recoverable). Never passes force=true, which would
+    /// permanently delete them - that's deliberately not exposed here.</summary>
+    public async Task TrashAssetsAsync(IEnumerable<string> assetIds, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, "assets")
+        {
+            Content = JsonContent.Create(new { ids = assetIds.ToArray() }, options: JsonOptions),
+        };
+        using var response = await _http.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            throw new ImmichApiException($"DELETE /assets epaonnistui ({(int)response.StatusCode} {response.StatusCode}): {body}", response.StatusCode);
+        }
     }
 
     public void Dispose()

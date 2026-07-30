@@ -1,5 +1,3 @@
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using System.Threading.Channels;
 using ImmichUploaderApp.Models;
 using Timer = System.Threading.Timer;
@@ -13,10 +11,7 @@ public sealed class UploadWatcherService : IDisposable
         ".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".bmp", ".tiff", ".webp", ".dng", ".cr2", ".nef", ".arw",
         ".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v", ".3gp",
     };
-    private static readonly HashSet<string> ThumbnailableExtensions = new(StringComparer.OrdinalIgnoreCase)
-    { ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp" };
 
-    private const int ThumbnailSize = 96;
     private const int QueueCapacity = 500;
     private const int MaxRetryAttempts = 6;
     private static readonly TimeSpan DebounceDelay = TimeSpan.FromSeconds(10);
@@ -25,7 +20,7 @@ public sealed class UploadWatcherService : IDisposable
     private const int MaxRecentUploads = 25;
     private const int MaxRecentFailures = 10;
 
-    private readonly UploadHistoryStore _history = new();
+    private readonly UploadHistoryStore _history;
     private readonly Dictionary<string, FileSystemWatcher> _watchers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Timer> _debounceTimers = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingPaths = new(StringComparer.OrdinalIgnoreCase);
@@ -49,6 +44,11 @@ public sealed class UploadWatcherService : IDisposable
     private string? _currentFileName;
     private double? _currentFileProgressPercent;
     private string _lastStatusText = Loc.T("status.stopped");
+
+    /// history is shared with PhotoSyncService when provided, so files it downloads (marked
+    /// known there) are never picked up here as "new" local files and re-uploaded - the same
+    /// store, not just the same schema, is what makes that safe.
+    public UploadWatcherService(UploadHistoryStore? history = null) => _history = history ?? new();
 
     public event Action<WatcherActivitySnapshot>? ActivityChanged;
     public bool IsRunning => _cts is { IsCancellationRequested: false };
@@ -265,7 +265,7 @@ public sealed class UploadWatcherService : IDisposable
             try { await _client.AddAssetToAlbumAsync(_albumId, response.Id, ct); }
             catch (Exception ex) { _history.AddPendingAlbum(_albumId, response.Id, path); RecordFailure(path, "Albumiin lisäys epäonnistui; yritetään uudelleen. " + SafeMessage(ex), true); }
         }
-        var thumbnail = TryCreateThumbnail(path);
+        var thumbnail = ThumbnailImaging.TryCreate(path);
         lock (_activityLock)
         {
             _currentFileName = null; _currentFileProgressPercent = null;
@@ -327,19 +327,6 @@ public sealed class UploadWatcherService : IDisposable
 
     private int GetQueueCount() => _queue?.Reader.Count ?? 0;
     private static string SafeMessage(Exception ex) => ex.Message.Length > 300 ? ex.Message[..300] + "…" : ex.Message;
-    private static byte[]? TryCreateThumbnail(string filePath)
-    {
-        if (!ThumbnailableExtensions.Contains(Path.GetExtension(filePath))) return null;
-        try
-        {
-            using var original = Image.FromFile(filePath);
-            var scale = Math.Min((double)ThumbnailSize / original.Width, (double)ThumbnailSize / original.Height);
-            using var resized = new Bitmap(Math.Max(1, (int)Math.Round(original.Width * scale)), Math.Max(1, (int)Math.Round(original.Height * scale)));
-            using (var g = Graphics.FromImage(resized)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(original, 0, 0, resized.Width, resized.Height); }
-            using var ms = new MemoryStream(); resized.Save(ms, ImageFormat.Png); return ms.ToArray();
-        }
-        catch { return null; }
-    }
 
     public void Dispose() { StopAsync().GetAwaiter().GetResult(); _lifecycleGate.Dispose(); }
     private sealed class FileNotReadyException : Exception { }
