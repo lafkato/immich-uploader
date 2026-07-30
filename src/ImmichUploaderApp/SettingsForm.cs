@@ -713,7 +713,7 @@ public sealed class SettingsForm : Form
 
     private async void OnDownloadAndInstallClicked(object? sender, EventArgs e)
     {
-        if (_pendingUpdate?.DownloadUrl is not { } downloadUrl) return;
+        if (_pendingUpdate is not { DownloadUrl: { } downloadUrl } pendingUpdate) return;
 
         var confirm = MessageBox.Show(this, Loc.T("settings.updateInstallConfirm"), Loc.T("app.name"),
             MessageBoxButtons.YesNo, MessageBoxIcon.Question);
@@ -721,24 +721,47 @@ public sealed class SettingsForm : Form
 
         _btnDownloadUpdate.Enabled = false;
         var fileName = Path.GetFileName(new Uri(downloadUrl).LocalPath);
+        string installerPath;
 
         try
         {
-            var installerPath = await _updateService.DownloadInstallerAsync(downloadUrl, fileName, (done, total) =>
+            installerPath = await _updateService.DownloadInstallerAsync(downloadUrl, fileName, (done, total) =>
             {
                 var percent = total > 0 ? (int)(done * 100 / total) : 0;
                 _lblUpdateResult.ForeColor = _palette.Text;
                 _lblUpdateResult.Text = Loc.T("settings.downloadingUpdate", percent);
             });
-
-            Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
-            _onExitRequested();
         }
         catch (Exception ex)
         {
             _lblUpdateResult.ForeColor = Color.Firebrick;
             _lblUpdateResult.Text = Loc.T("settings.updateDownloadFailed", ex.Message);
             _btnDownloadUpdate.Enabled = true;
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
+            _onExitRequested();
+        }
+        catch (Exception)
+        {
+            // Windows Defender/SmartScreen not infrequently quarantines unsigned, self-contained
+            // .NET executables as a false positive (e.g. "Trojan:Win32/Wacatac.B!ml") right as
+            // they're launched, even though the download itself succeeded moments earlier - a
+            // known limitation of this project's unsigned build, not something this code can fix
+            // (see the "Reduce antivirus false positives" commit). Point at the release page
+            // instead of surfacing the raw exception, so the user has somewhere to go.
+            _lblUpdateResult.ForeColor = Color.Firebrick;
+            _lblUpdateResult.Text = Loc.T("settings.updateLaunchBlocked");
+            _btnDownloadUpdate.Enabled = true;
+
+            if (pendingUpdate.ReleaseUrl is { } releaseUrl)
+            {
+                try { Process.Start(new ProcessStartInfo(releaseUrl) { UseShellExecute = true }); }
+                catch { /* best effort */ }
+            }
         }
     }
 }
