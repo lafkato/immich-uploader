@@ -93,6 +93,9 @@ public static class Loc
             ["settings.downloadingUpdate"] = "Ladataan päivitystä... {0} %",
             ["settings.updateDownloadFailed"] = "Päivityksen lataus epäonnistui: {0}",
             ["settings.updateInstallConfirm"] = "Asennusohjelma käynnistetään ja sovellus suljetaan hetkeksi asennuksen ajaksi. Jatketaanko?",
+            ["settings.tabGeneral"] = "Yleiset",
+            ["settings.tabServer"] = "Palvelin",
+            ["settings.tabFolders"] = "Kansiot",
         },
         ["en"] = new()
         {
@@ -160,6 +163,9 @@ public static class Loc
             ["settings.downloadingUpdate"] = "Downloading update... {0} %",
             ["settings.updateDownloadFailed"] = "Update download failed: {0}",
             ["settings.updateInstallConfirm"] = "The installer will launch and the app will close briefly while it updates. Continue?",
+            ["settings.tabGeneral"] = "General",
+            ["settings.tabServer"] = "Server",
+            ["settings.tabFolders"] = "Folders",
         },
         ["sv"] = new()
         {
@@ -227,6 +233,9 @@ public static class Loc
             ["settings.downloadingUpdate"] = "Laddar ner uppdatering... {0} %",
             ["settings.updateDownloadFailed"] = "Nedladdning av uppdatering misslyckades: {0}",
             ["settings.updateInstallConfirm"] = "Installationsprogrammet startar och appen stängs kort under installationen. Fortsätta?",
+            ["settings.tabGeneral"] = "Allmänt",
+            ["settings.tabServer"] = "Server",
+            ["settings.tabFolders"] = "Mappar",
         },
         ["de"] = new()
         {
@@ -294,6 +303,9 @@ public static class Loc
             ["settings.downloadingUpdate"] = "Update wird heruntergeladen... {0} %",
             ["settings.updateDownloadFailed"] = "Update-Download fehlgeschlagen: {0}",
             ["settings.updateInstallConfirm"] = "Das Installationsprogramm wird gestartet und die App wird kurz für die Installation geschlossen. Fortfahren?",
+            ["settings.tabGeneral"] = "Allgemein",
+            ["settings.tabServer"] = "Server",
+            ["settings.tabFolders"] = "Ordner",
         },
     };
 }
