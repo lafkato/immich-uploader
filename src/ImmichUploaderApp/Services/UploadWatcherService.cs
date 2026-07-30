@@ -265,7 +265,15 @@ public sealed class UploadWatcherService : IDisposable
             try { await _client.AddAssetToAlbumAsync(_albumId, response.Id, ct); }
             catch (Exception ex) { _history.AddPendingAlbum(_albumId, response.Id, path); RecordFailure(path, "Albumiin lisäys epäonnistui; yritetään uudelleen. " + SafeMessage(ex), true); }
         }
-        var thumbnail = ThumbnailImaging.TryCreate(path);
+        // Guards against more than just a decode failure inside TryCreate's own try/catch: if the
+        // imaging library's assembly can't be loaded at all (reproduced live - a broken publish
+        // was missing SixLabors.ImageSharp.dll), the CLR throws at this call site, before
+        // TryCreate's own body ever runs. Without this, that exception aborted the whole upload
+        // record and silently emptied the "recent uploads" list, even though the real upload to
+        // Immich (above) had already succeeded.
+        byte[]? thumbnail;
+        try { thumbnail = ThumbnailImaging.TryCreate(path); }
+        catch (Exception ex) { AppLogger.Log($"VAROITUS: esikatselukuvan luonti epaonnistui '{path}': {ex.Message}"); thumbnail = null; }
         lock (_activityLock)
         {
             _currentFileName = null; _currentFileProgressPercent = null;

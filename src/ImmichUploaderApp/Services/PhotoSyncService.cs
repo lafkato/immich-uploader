@@ -306,7 +306,19 @@ public sealed class PhotoSyncService : IDisposable
         }
         else
         {
-            thumbnail = ThumbnailImaging.TryCreate(path);
+            // Guards against more than just a decode failure inside TryCreate's own try/catch: if
+            // the imaging library's assembly can't be loaded at all (reproduced live - a broken
+            // publish was missing SixLabors.ImageSharp.dll), the CLR throws at this call site,
+            // before TryCreate's own body ever runs. Without this, that exception propagated all
+            // the way out of SyncAssetAsync - the file was already downloaded and the manifest
+            // already updated by that point, but the asset never made it into "recent downloads",
+            // and every single photo hit this on every scan, drowning the log and slowing scans.
+            try { thumbnail = ThumbnailImaging.TryCreate(path); }
+            catch (Exception ex)
+            {
+                AppLogger.Log($"VAROITUS: esikatselukuvan luonti epaonnistui '{path}': {ex.Message}");
+                thumbnail = null;
+            }
         }
 
         lock (_activityLock)

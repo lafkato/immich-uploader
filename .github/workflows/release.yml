@@ -33,6 +33,32 @@ jobs:
       - name: Publish application
         run: dotnet publish src\ImmichUploaderApp\ImmichUploaderApp.csproj -c Release -o publish\release -p:Version=${{ steps.version.outputs.version }}
 
+      - name: Verify every dependency listed in deps.json was actually copied
+        # v1.1.0 shipped with SixLabors.ImageSharp.dll listed in the deps.json manifest but never
+        # physically copied into publish\release, breaking thumbnail generation everywhere at
+        # runtime - `dotnet publish` reported success and nothing else caught it. This fails the
+        # build loudly instead of shipping a installer silently missing a dependency again.
+        shell: pwsh
+        run: |
+          $deps = Get-Content "publish\release\ImmichUploader.deps.json" -Raw | ConvertFrom-Json
+          $missing = @()
+          foreach ($target in $deps.targets.PSObject.Properties) {
+            foreach ($library in $target.Value.PSObject.Properties) {
+              if ($library.Value.runtime) {
+                foreach ($runtimeFile in $library.Value.runtime.PSObject.Properties.Name) {
+                  $fileName = Split-Path $runtimeFile -Leaf
+                  $destPath = Join-Path "publish\release" $fileName
+                  if (-not (Test-Path $destPath)) { $missing += "$fileName (from $($library.Name))" }
+                }
+              }
+            }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Error "Files listed in deps.json but missing from publish output:`n$($missing -join "`n")"
+            exit 1
+          }
+          Write-Host "All $($deps.targets.PSObject.Properties.Count) target(s) verified - every runtime dependency is present."
+
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
 
