@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ImmichUploaderApp.Models;
 using ImmichUploaderApp.Services;
 
@@ -9,6 +10,7 @@ public sealed class SettingsForm : Form
     private readonly Palette _palette;
     private readonly HashSet<string> _originalExcludeSet;
     private readonly List<string> _directories;
+    private readonly Action _onExitRequested;
 
     private readonly TextBox _txtServerUrl = new();
     private readonly TextBox _txtApiKey = new() { UseSystemPasswordChar = true };
@@ -22,12 +24,18 @@ public sealed class SettingsForm : Form
     private readonly Label _lblTestResult = new() { AutoSize = true, MaximumSize = new Size(420, 0) };
     private readonly ComboBox _cmbTheme = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     private readonly ComboBox _cmbLanguage = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+    private readonly UpdateService _updateService = new();
+    private readonly Label _lblCurrentVersion = new() { AutoSize = true };
+    private readonly Label _lblUpdateResult = new() { AutoSize = true, MaximumSize = new Size(420, 0) };
+    private readonly Button _btnDownloadUpdate = new() { Text = Loc.T("settings.downloadAndInstall"), AutoSize = true, Visible = false, Margin = new Padding(0, 8, 0, 0) };
+    private UpdateCheckResult? _pendingUpdate;
 
     public AppConfig? ResultConfig { get; private set; }
 
-    public SettingsForm(AppConfig config)
+    public SettingsForm(AppConfig config, Action? onExitRequested = null)
     {
         _initialConfig = config;
+        _onExitRequested = onExitRequested ?? Application.Exit;
         _palette = ThemeService.Resolve(config.Theme);
         _directories = new List<string>(config.Directories);
         _originalExcludeSet = new HashSet<string>(config.ExcludeDirectories, StringComparer.OrdinalIgnoreCase);
@@ -180,6 +188,26 @@ public sealed class SettingsForm : Form
         _chkStartWithWindows.Margin = new Padding(0, 16, 0, 4);
         StyleCheckBox(_chkStartWithWindows);
         content.Controls.Add(_chkStartWithWindows);
+
+        content.Controls.Add(new Panel { Width = ContentWidth, Height = 1, BackColor = _palette.Divider, Margin = new Padding(0, 16, 0, 4) });
+
+        content.Controls.Add(MakeLabel(Loc.T("settings.updatesLabel"), new Padding(0, 6, 0, 2)));
+        _lblCurrentVersion.ForeColor = _palette.Text;
+        _lblCurrentVersion.Text = Loc.T("settings.currentVersion", UpdateService.CurrentVersion.ToString(3));
+        content.Controls.Add(_lblCurrentVersion);
+
+        var updatePanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 6, 0, 0), BackColor = _palette.Background };
+        var btnCheckUpdate = StyleButton(new Button { Text = Loc.T("settings.checkForUpdates"), AutoSize = true });
+        btnCheckUpdate.Click += OnCheckForUpdatesClicked;
+        updatePanel.Controls.Add(btnCheckUpdate);
+        _lblUpdateResult.Margin = new Padding(10, 6, 0, 0);
+        _lblUpdateResult.ForeColor = _palette.Text;
+        updatePanel.Controls.Add(_lblUpdateResult);
+        content.Controls.Add(updatePanel);
+
+        StyleButton(_btnDownloadUpdate);
+        _btnDownloadUpdate.Click += OnDownloadAndInstallClicked;
+        content.Controls.Add(_btnDownloadUpdate);
 
         // Dock-jarjestys on tarkea: Bottom-ankkuroitu palkki pitaa lisata ENNEN
         // Fill-ankkuroitua sisaltoa, muuten Fill peittaa sen.
@@ -530,5 +558,66 @@ public sealed class SettingsForm : Form
         ResultConfig = updated;
         DialogResult = DialogResult.OK;
         Close();
+    }
+
+    private async void OnCheckForUpdatesClicked(object? sender, EventArgs e)
+    {
+        _btnDownloadUpdate.Visible = false;
+        _pendingUpdate = null;
+        _lblUpdateResult.ForeColor = _palette.Text;
+        _lblUpdateResult.Text = Loc.T("settings.checkingForUpdates");
+
+        try
+        {
+            var result = await _updateService.CheckForUpdateAsync();
+            if (UpdateService.IsNewer(result.LatestVersion, UpdateService.CurrentVersion))
+            {
+                _pendingUpdate = result;
+                _lblUpdateResult.ForeColor = Color.SeaGreen;
+                _lblUpdateResult.Text = Loc.T("settings.updateAvailable", result.TagName);
+                _btnDownloadUpdate.Visible = result.DownloadUrl is not null;
+            }
+            else
+            {
+                _lblUpdateResult.ForeColor = _palette.Text;
+                _lblUpdateResult.Text = Loc.T("settings.upToDate");
+            }
+        }
+        catch (Exception ex)
+        {
+            _lblUpdateResult.ForeColor = Color.Firebrick;
+            _lblUpdateResult.Text = Loc.T("settings.updateCheckFailed", ex.Message);
+        }
+    }
+
+    private async void OnDownloadAndInstallClicked(object? sender, EventArgs e)
+    {
+        if (_pendingUpdate?.DownloadUrl is not { } downloadUrl) return;
+
+        var confirm = MessageBox.Show(this, Loc.T("settings.updateInstallConfirm"), Loc.T("app.name"),
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (confirm != DialogResult.Yes) return;
+
+        _btnDownloadUpdate.Enabled = false;
+        var fileName = Path.GetFileName(new Uri(downloadUrl).LocalPath);
+
+        try
+        {
+            var installerPath = await _updateService.DownloadInstallerAsync(downloadUrl, fileName, (done, total) =>
+            {
+                var percent = total > 0 ? (int)(done * 100 / total) : 0;
+                _lblUpdateResult.ForeColor = _palette.Text;
+                _lblUpdateResult.Text = Loc.T("settings.downloadingUpdate", percent);
+            });
+
+            Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
+            _onExitRequested();
+        }
+        catch (Exception ex)
+        {
+            _lblUpdateResult.ForeColor = Color.Firebrick;
+            _lblUpdateResult.Text = Loc.T("settings.updateDownloadFailed", ex.Message);
+            _btnDownloadUpdate.Enabled = true;
+        }
     }
 }

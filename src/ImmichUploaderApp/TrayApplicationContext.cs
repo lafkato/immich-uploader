@@ -165,7 +165,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void ShowSettings(bool forceOpen)
     {
-        using var form = new SettingsForm(_config);
+        using var form = new SettingsForm(_config, onExitRequested: () => _ = ExitApplicationAsync());
         var result = form.ShowDialog();
         if (result == DialogResult.OK && form.ResultConfig is not null)
         {
@@ -205,7 +205,9 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private async void OnExitClicked(object? sender, EventArgs e)
+    private async void OnExitClicked(object? sender, EventArgs e) => await ExitApplicationAsync();
+
+    private async Task ExitApplicationAsync()
     {
         _trayIcon.Visible = false;
         await _watcher.StopAsync();
