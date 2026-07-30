@@ -12,7 +12,12 @@ public sealed class PhotoSyncService : IDisposable
 {
     private const int PageSize = 500;
     private const int MaxRecentDownloads = 25;
+    private const int MaxRecentDeletions = 25;
     private static readonly TimeSpan ScanInterval = TimeSpan.FromMinutes(15);
+    // Deliberately independent of, and much faster than, the full scan: a locally deleted file
+    // shouldn't have to wait behind a slow album-membership-heavy scan to get trashed in Immich
+    // too. See ReconcileLocalDeletionsAsync.
+    private static readonly TimeSpan LocalDeletionCheckInterval = TimeSpan.FromMinutes(1);
 
     private static readonly Dictionary<string, CultureInfo> MonthCultures = new()
     {
@@ -27,12 +32,15 @@ public sealed class PhotoSyncService : IDisposable
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly object _activityLock = new();
     private readonly List<RecentDownload> _recentDownloads = new();
+    private readonly List<RecentDeletion> _recentDeletions = new();
 
     private Timer? _timer;
+    private Timer? _localDeletionTimer;
     private CancellationTokenSource? _cts;
     private ImmichClient? _client;
     private AppConfig _config = new();
     private int _scanRunning;
+    private int _localCheckRunning;
     private string _lastStatusText = Loc.T("status.stopped");
     private Dictionary<string, List<string>> _albumNamesByAssetId = new();
 
@@ -46,7 +54,7 @@ public sealed class PhotoSyncService : IDisposable
 
     public PhotoSyncActivitySnapshot GetCurrentSnapshot()
     {
-        lock (_activityLock) return new(_lastStatusText, _recentDownloads.ToList());
+        lock (_activityLock) return new(_lastStatusText, _recentDownloads.ToList(), _recentDeletions.ToList());
     }
 
     private void RaiseActivity(string statusText)
@@ -55,9 +63,18 @@ public sealed class PhotoSyncService : IDisposable
         lock (_activityLock)
         {
             _lastStatusText = statusText;
-            snapshot = new PhotoSyncActivitySnapshot(statusText, _recentDownloads.ToList());
+            snapshot = new PhotoSyncActivitySnapshot(statusText, _recentDownloads.ToList(), _recentDeletions.ToList());
         }
         ActivityChanged?.Invoke(snapshot);
+    }
+
+    private void RecordDeletion(string fileName, string reason)
+    {
+        lock (_activityLock)
+        {
+            _recentDeletions.Insert(0, new RecentDeletion(fileName, DateTime.Now, reason));
+            if (_recentDeletions.Count > MaxRecentDeletions) _recentDeletions.RemoveRange(MaxRecentDeletions, _recentDeletions.Count - MaxRecentDeletions);
+        }
     }
 
     public async Task StartAsync(AppConfig config)
@@ -73,6 +90,9 @@ public sealed class PhotoSyncService : IDisposable
             _cts = new CancellationTokenSource();
             _client = new ImmichClient(config.ServerUrl, config.ApiKey);
             _timer = new Timer(_ => _ = ScanTickAsync(), null, TimeSpan.Zero, ScanInterval);
+            // Staggered start (not TimeSpan.Zero) so it doesn't immediately duplicate work the
+            // full scan's own first tick is already about to do.
+            _localDeletionTimer = new Timer(_ => _ = LocalDeletionCheckTickAsync(), null, LocalDeletionCheckInterval, LocalDeletionCheckInterval);
             RaiseActivity(Loc.T("status.idle"));
         }
         finally { _lifecycleGate.Release(); }
@@ -88,12 +108,22 @@ public sealed class PhotoSyncService : IDisposable
     private Task StopCoreAsync()
     {
         _timer?.Dispose(); _timer = null;
+        _localDeletionTimer?.Dispose(); _localDeletionTimer = null;
         _cts?.Cancel(); _cts?.Dispose(); _cts = null;
         _client?.Dispose(); _client = null;
         return Task.CompletedTask;
     }
 
     public void ScanNow() => _ = ScanTickAsync();
+
+    private async Task LocalDeletionCheckTickAsync()
+    {
+        if (!IsRunning || _client is null || Interlocked.CompareExchange(ref _localCheckRunning, 1, 0) != 0) return;
+        try { await ReconcileLocalDeletionsAsync(_cts!.Token); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { AppLogger.Log($"VIRHE paikallisten poistojen tarkistuksessa: {ex.Message}"); }
+        finally { Interlocked.Exchange(ref _localCheckRunning, 0); }
+    }
 
     private async Task ScanTickAsync()
     {
@@ -120,7 +150,7 @@ public sealed class PhotoSyncService : IDisposable
                         // come back as their own VIDEO entry, but Immich itself keeps them out of
                         // the main library view - mirror that instead of dropping a stray ~2s
                         // clip into the video folder for every Live Photo. Leaving the id out of
-                        // remoteIds also lets ReconcileDeletionsAsync clean up anything a previous
+                        // remoteIds also lets ReconcileRemoteDeletions clean up anything a previous
                         // scan already downloaded for it.
                         continue;
                     }
@@ -143,7 +173,7 @@ public sealed class PhotoSyncService : IDisposable
                 pageNumber++;
             }
 
-            await ReconcileDeletionsAsync(remoteIds, ct);
+            ReconcileRemoteDeletions(remoteIds);
             AppLogger.Log($"Kuvasynkronointi valmis: {downloaded} uutta/paivitettya tiedostoa, {remoteIds.Count} kuvaa Immichissa.");
             RaiseActivity(Loc.T("sync.idleWithCount", remoteIds.Count));
         }
@@ -209,17 +239,24 @@ public sealed class PhotoSyncService : IDisposable
         if (hasEntry && entry.Mode != effectiveMode)
         {
             // Mode switched (Thumbnail <-> Original) - every existing copy is stale regardless
-            // of location, so drop them all and treat this as a fresh asset below.
+            // of location, so drop them all and treat this as a fresh asset below. Removing the
+            // manifest entry immediately (not after the fresh download completes) matters now
+            // that ReconcileLocalDeletionsAsync runs on its own fast timer, independent of this
+            // scan: without it, there'd be a window where the manifest still claims these
+            // now-deleted paths should exist, which that independent check would misread as the
+            // user having deleted the file and (if enabled) wrongly trash the asset in Immich.
             foreach (var stale in previousPaths) TryDeleteFile(stale);
             previousPaths = new List<string>();
+            _manifest.Remove(asset.Id);
         }
         else
         {
             // If the user deleted a copy we previously placed somewhere we still want it, that's
             // a deletion signal, not something to silently undo by re-downloading - otherwise a
-            // locally deleted file would just reappear before ReconcileDeletionsAsync ever saw it
-            // gone. Leave the whole asset alone this scan; reconciliation decides what happens
-            // next (keep remaining copies, or trash remotely if none are left).
+            // locally deleted file would just reappear before ReconcileLocalDeletionsAsync's own,
+            // independent timer ever saw it gone. Leave the whole asset alone this scan;
+            // reconciliation decides what happens next (keep remaining copies, or trash remotely
+            // if none are left).
             var stillWantedButMissing = previousPaths
                 .Intersect(wantedPaths, StringComparer.OrdinalIgnoreCase)
                 .Any(p => !File.Exists(p));
@@ -410,20 +447,37 @@ public sealed class PhotoSyncService : IDisposable
         return sanitized.Length == 0 || sanitized is "." or ".." ? fallback : sanitized;
     }
 
-    private async Task ReconcileDeletionsAsync(HashSet<string> remoteIds, CancellationToken ct)
+    /// Handles only the "deleted on the Immich side" direction - needs to know the current
+    /// remote asset list, so it's necessarily tied to the full scan that just paged it. The other
+    /// direction (a local delete triggering a remote trash) is handled independently by
+    /// ReconcileLocalDeletionsAsync, on its own fast timer - see StartAsync.
+    private void ReconcileRemoteDeletions(HashSet<string> remoteIds)
     {
-        var toTrashRemotely = new List<string>();
         foreach (var (assetId, entry) in _manifest.GetAll())
         {
-            if (!remoteIds.Contains(assetId))
-            {
-                // No longer on the Immich side (deleted there, or trashed by us on a previous
-                // scan) - drop every local copy too.
-                foreach (var path in entry.LocalPaths) TryDeleteFile(path);
-                _manifest.Remove(assetId);
-                continue;
-            }
+            if (remoteIds.Contains(assetId)) continue;
 
+            // No longer on the Immich side (deleted there, or trashed by us on a previous scan)
+            // - drop every local copy too.
+            foreach (var path in entry.LocalPaths)
+            {
+                TryDeleteFile(path);
+                RecordDeletion(Path.GetFileName(path), Loc.T("sync.deletedFromImmich"));
+            }
+            _manifest.Remove(assetId);
+        }
+    }
+
+    /// Local-delete -> remote-trash detection, split out from the main scan and run on its own
+    /// fast timer (see StartAsync) so it isn't stuck waiting behind the slow, album-membership-
+    /// heavy full scan - a user deleting a file locally shouldn't have to wait up to 15 minutes to
+    /// see it trashed in Immich too. Purely a local file-existence check against the manifest, no
+    /// network calls except the trash request itself, so it's cheap enough to run every minute.
+    private async Task ReconcileLocalDeletionsAsync(CancellationToken ct)
+    {
+        var toTrashRemotely = new List<(string AssetId, string FileName)>();
+        foreach (var (assetId, entry) in _manifest.GetAll())
+        {
             var survivingPaths = entry.LocalPaths.Where(File.Exists).ToList();
             if (survivingPaths.Count == entry.LocalPaths.Count) continue; // nothing missing
 
@@ -431,7 +485,9 @@ public sealed class PhotoSyncService : IDisposable
             {
                 // The user deleted every mirrored copy of this asset.
                 _manifest.Remove(assetId);
-                if (_config.SyncDeleteRemoteOnLocalDelete) toTrashRemotely.Add(assetId);
+                var fileName = Path.GetFileName(entry.LocalPaths[0]);
+                if (_config.SyncDeleteRemoteOnLocalDelete) toTrashRemotely.Add((assetId, fileName));
+                else RecordDeletion(fileName, Loc.T("sync.deletedLocallyOnly"));
             }
             else
             {
@@ -442,10 +498,16 @@ public sealed class PhotoSyncService : IDisposable
             }
         }
 
-        if (toTrashRemotely.Count > 0)
+        if (toTrashRemotely.Count == 0) return;
+        try
         {
-            try { await _client!.TrashAssetsAsync(toTrashRemotely, ct); }
-            catch (Exception ex) { AppLogger.Log($"VAROITUS: roskakoriin siirto epaonnistui: {ex.Message}"); }
+            await _client!.TrashAssetsAsync(toTrashRemotely.Select(x => x.AssetId), ct);
+            foreach (var (_, fileName) in toTrashRemotely) RecordDeletion(fileName, Loc.T("sync.deletedLocallyAndTrashed"));
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Log($"VAROITUS: roskakoriin siirto epaonnistui: {ex.Message}");
+            foreach (var (_, fileName) in toTrashRemotely) RecordDeletion(fileName, Loc.T("sync.deletedLocallyTrashFailed"));
         }
     }
 

@@ -21,6 +21,7 @@ public sealed class ActivityPanelForm : Form
     private FlatProgressBar _storageProgressBar = null!;
     private IReadOnlyList<RecentUpload> _lastUploads = Array.Empty<RecentUpload>();
     private IReadOnlyList<RecentDownload> _lastDownloads = Array.Empty<RecentDownload>();
+    private IReadOnlyList<RecentDeletion> _lastDeletions = Array.Empty<RecentDeletion>();
 
     private const int CornerRadius = 10;
 
@@ -324,6 +325,7 @@ public sealed class ActivityPanelForm : Form
         {
             if (IsDisposed) return;
             _lastDownloads = snapshot.RecentDownloads;
+            _lastDeletions = snapshot.RecentDeletions;
             RenderActivity();
         });
     }
@@ -377,6 +379,22 @@ public sealed class ActivityPanelForm : Form
         else
         {
             AddActivityRows(_lastDownloads.Select(d => (d.FileName, d.DownloadedAtLocal, d.SizeBytes, d.ThumbnailPng)), rowWidth);
+        }
+
+        AddSectionHeader(Loc.T("panel.deletionsHeader"), topMargin: 14);
+        if (_lastDeletions.Count == 0)
+        {
+            AddEmptyLabel(Loc.T("panel.noDeletions"));
+        }
+        else
+        {
+            var isFirst = true;
+            foreach (var deletion in _lastDeletions)
+            {
+                if (!isFirst) _recentList.Controls.Add(new Panel { Width = rowWidth, Height = 1, BackColor = _palette.Divider, Margin = new Padding(0, 2, 0, 2) });
+                isFirst = false;
+                _recentList.Controls.Add(BuildDeletionRow(deletion.FileName, deletion.Reason, deletion.DeletedAtLocal, rowWidth));
+            }
         }
 
         _recentList.ResumeLayout();
@@ -481,6 +499,42 @@ public sealed class ActivityPanelForm : Form
         row.Controls.Add(thumbBox);
         row.Controls.Add(nameLabel);
         row.Controls.Add(timeLabel);
+        return row;
+    }
+
+    /// No thumbnail (the file is gone by the time this renders, whichever side deleted it first)
+    /// - just the filename, why it was deleted, and when, in the same two-line row shape as the
+    /// upload/download rows so the three sections read as one consistent list.
+    private Control BuildDeletionRow(string fileName, string reason, DateTime atLocal, int rowWidth)
+    {
+        var row = new Panel
+        {
+            Width = rowWidth,
+            Height = 40,
+            Margin = new Padding(0, 4, 0, 4),
+            BackColor = _palette.Background,
+        };
+
+        var nameLabel = new Label
+        {
+            Text = fileName,
+            Location = new Point(0, 2),
+            Size = new Size(rowWidth, 18),
+            ForeColor = _palette.Text,
+            AutoEllipsis = true,
+        };
+        var reasonLabel = new Label
+        {
+            Text = $"{reason} · {FormatRelativeTime(atLocal)}",
+            Location = new Point(0, 21),
+            Size = new Size(rowWidth, 16),
+            ForeColor = _palette.TextMuted,
+            Font = new Font(Font.FontFamily, 8f),
+            AutoEllipsis = true,
+        };
+
+        row.Controls.Add(nameLabel);
+        row.Controls.Add(reasonLabel);
         return row;
     }
 
