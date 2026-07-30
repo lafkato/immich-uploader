@@ -10,14 +10,18 @@
     <RootNamespace>ImmichUploaderApp</RootNamespace>
     <ApplicationIcon>Resources\icon.ico</ApplicationIcon>
 
-    <!-- Publish: single self-contained exe, no separate .NET runtime install needed -->
+    <!-- Publish: self-contained folder deployment, no separate .NET runtime install needed.
+         Avoid a compressed single-file bundle by default because large packed executables
+         are more likely to trip antivirus heuristics. Override these properties at the
+         command line only when a local one-file build is specifically needed. -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>true</SelfContained>
-    <PublishSingleFile>true</PublishSingleFile>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <SelfContained Condition="'$(SelfContained)' == ''">true</SelfContained>
+    <PublishSingleFile Condition="'$(PublishSingleFile)' == ''">false</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract Condition="'$(PublishSingleFile)' == 'true'">true</IncludeNativeLibrariesForSelfExtract>
+    <PublishReadyToRun Condition="'$(PublishReadyToRun)' == ''">false</PublishReadyToRun>
     <PublishTrimmed>false</PublishTrimmed>
     <DebugType>embedded</DebugType>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <EnableCompressionInSingleFile Condition="'$(EnableCompressionInSingleFile)' == ''">false</EnableCompressionInSingleFile>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 

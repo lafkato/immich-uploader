@@ -55,7 +55,7 @@ public sealed class ImmichClient : IDisposable
         _ownsHttpClient = http is null;
 
         if (!IsValidServerUrl(serverUrl)) throw new ArgumentException("Server URL must be an absolute HTTP(S) URL.", nameof(serverUrl));
-        var baseUrl = serverUrl.TrimEnd('/') + "/";
+        var baseUrl = NormalizeServerUrl(serverUrl) + "/";
         _http.BaseAddress = new Uri(baseUrl);
         _http.Timeout = TimeSpan.FromMinutes(30);
         _http.DefaultRequestHeaders.Remove("x-api-key");
@@ -65,6 +65,13 @@ public sealed class ImmichClient : IDisposable
 
     public static bool IsValidServerUrl(string serverUrl) =>
         Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    /// <summary>Ensures the server URL ends with "/api", appending it if the user omitted the API path.</summary>
+    public static string NormalizeServerUrl(string serverUrl)
+    {
+        var trimmed = serverUrl.Trim().TrimEnd('/');
+        return trimmed.EndsWith("/api", StringComparison.OrdinalIgnoreCase) ? trimmed : trimmed + "/api";
+    }
 
     public static string GetContentType(string filePath)
     {

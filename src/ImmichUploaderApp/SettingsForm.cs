@@ -452,6 +452,9 @@ public sealed class SettingsForm : Form
             return;
         }
 
+        serverUrl = ImmichClient.NormalizeServerUrl(serverUrl);
+        _txtServerUrl.Text = serverUrl;
+
         _lblTestResult.ForeColor = _palette.Text;
         _lblTestResult.Text = Loc.T("settings.testing");
 
@@ -487,6 +490,9 @@ public sealed class SettingsForm : Form
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
+
+        serverUrl = ImmichClient.NormalizeServerUrl(serverUrl);
+        _txtServerUrl.Text = serverUrl;
 
         if (_directories.Count == 0)
         {
