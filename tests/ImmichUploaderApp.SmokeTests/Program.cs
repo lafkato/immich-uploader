@@ -15,6 +15,11 @@ Check(ImmichClient.GetContentType("clip.mkv") == "video/x-matroska", "MKV MIME t
 var serialized = JsonSerializer.Serialize(new AppConfig { ApiKey = "do-not-persist-this" });
 Check(!serialized.Contains("do-not-persist-this", StringComparison.Ordinal), "API key is never serialized in plaintext");
 
+Check(UpdateService.IsNewer(new Version(1, 0, 3), new Version(1, 0, 2)), "1.0.3 is newer than 1.0.2");
+Check(!UpdateService.IsNewer(new Version(1, 0, 2), new Version(1, 0, 2)), "1.0.2 is not newer than itself");
+Check(!UpdateService.IsNewer(new Version(1, 0, 2), new Version(1, 0, 2, 0)), "3-part tag version vs 4-part assembly version compares equal, not older");
+Check(UpdateService.IsNewer(new Version(2, 0, 0), new Version(1, 9, 9)), "Major version bump is newer");
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine("Smoke tests failed: " + string.Join("; ", failures));
