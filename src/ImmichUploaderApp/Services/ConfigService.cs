@@ -12,6 +12,7 @@ public sealed class ConfigService
     public static string LogDir => Path.Combine(StateDir, "logs");
     public static string UploadedLogPath => Path.Combine(StateDir, "uploaded.log");
     public static string UploadHistoryPath => Path.Combine(StateDir, "upload-history.json");
+    public static string SyncManifestPath => Path.Combine(StateDir, "sync-manifest.json");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

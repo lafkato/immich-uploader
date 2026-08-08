@@ -16,13 +16,31 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _viewLogItem;
     private readonly ToolStripMenuItem _exitItem;
     private readonly ConfigService _configService = new();
-    private readonly UploadWatcherService _watcher = new();
+    // Shared so PhotoSyncService can mark downloaded files "known" here and UploadWatcherService
+    // never re-uploads them - what makes an overlapping sync/watch folder actually safe.
+    private readonly UploadHistoryStore _uploadHistory = new();
+    private readonly UploadWatcherService _watcher;
+    private readonly PhotoSyncService _photoSync;
 
     private AppConfig _config;
     private ActivityPanelForm? _activityPanel;
 
+    // Dedicated invisible marshaling target for cross-thread UI updates (background watcher/sync
+    // activity events land on thread-pool threads). _statusItem.GetCurrentParent()?.InvokeRequired
+    // used to be the check here, but GetCurrentParent() returns null until the tray menu has
+    // actually been shown once - null-conditional then short-circuits "?.InvokeRequired == true"
+    // to false, so an early activity update was applied to the ToolStripMenuItem directly from a
+    // background thread instead of being marshaled, corrupting the menu's internal item collection
+    // (crashed the whole process with an unhandled IndexOutOfRangeException in
+    // ToolStripItemCollection.Clear() - reproduced live). This control's handle is forced to exist
+    // immediately below, so its InvokeRequired is reliable from the very first activity event.
+    private readonly Control _uiThreadSync = new();
+
     public TrayApplicationContext()
     {
+        _ = _uiThreadSync.Handle; // Forces handle creation now, on the UI thread.
+        _watcher = new UploadWatcherService(_uploadHistory);
+        _photoSync = new PhotoSyncService(_uploadHistory);
         _config = _configService.LoadOrCreate();
         Loc.Language = _config.Language;
 
@@ -70,6 +88,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         else
         {
             _ = StartWatcherAsync();
+            _ = StartPhotoSyncAsync();
+            if (Environment.GetEnvironmentVariable("IMMICH_FORCE_ACTIVITY_PANEL") == "1") ShowActivityPanel();
         }
     }
 
@@ -86,11 +106,23 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
+    private async Task StartPhotoSyncAsync()
+    {
+        try
+        {
+            await _photoSync.StartAsync(_config);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Log($"VAROITUS: kuvasynkronoinnin kaynnistys epaonnistui: {ex.Message}");
+        }
+    }
+
     private void OnWatcherActivityChanged(WatcherActivitySnapshot snapshot)
     {
-        if (_statusItem.GetCurrentParent()?.InvokeRequired == true)
+        if (_uiThreadSync.InvokeRequired)
         {
-            _statusItem.GetCurrentParent()!.BeginInvoke(new Action(() => UpdateStatusText(snapshot.StatusText)));
+            _uiThreadSync.BeginInvoke(new Action(() => UpdateStatusText(snapshot.StatusText)));
         }
         else
         {
@@ -137,7 +169,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
-        _activityPanel = new ActivityPanelForm(_watcher, _config, () => ShowSettings(forceOpen: false));
+        _activityPanel = new ActivityPanelForm(_watcher, _photoSync, _config, () => ShowSettings(forceOpen: false));
         _activityPanel.FormClosed += (_, _) => _activityPanel = null;
         _activityPanel.Show();
         _activityPanel.Activate();
@@ -174,6 +206,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             _configService.Save(_config);
             RefreshLocalizedUi();
             _ = StartWatcherAsync();
+            _ = StartPhotoSyncAsync();
         }
         else if (forceOpen && !_config.IsConfigured)
         {
@@ -211,7 +244,9 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         _trayIcon.Visible = false;
         await _watcher.StopAsync();
+        await _photoSync.StopAsync();
         _trayIcon.Dispose();
+        _uiThreadSync.Dispose();
         Application.Exit();
     }
 }

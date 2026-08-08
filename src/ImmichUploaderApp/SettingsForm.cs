@@ -29,6 +29,13 @@ public sealed class SettingsForm : Form
     private readonly Label _lblUpdateResult = new() { AutoSize = true, MaximumSize = new Size(420, 0) };
     private readonly Button _btnDownloadUpdate = new() { Text = Loc.T("settings.downloadAndInstall"), AutoSize = true, Visible = false, Margin = new Padding(0, 8, 0, 0) };
     private UpdateCheckResult? _pendingUpdate;
+    private readonly CheckBox _chkSyncEnabled = new() { Text = Loc.T("sync.enable") };
+    private readonly TextBox _txtSyncPhotoFolder = new() { ReadOnly = true };
+    private readonly TextBox _txtSyncVideoFolder = new() { ReadOnly = true };
+    private readonly RadioButton _rdoSyncThumbnail = new() { Text = Loc.T("sync.modeThumbnail") };
+    private readonly RadioButton _rdoSyncOriginal = new() { Text = Loc.T("sync.modeOriginal") };
+    private readonly CheckBox _chkSyncDeleteRemote = new() { Text = Loc.T("sync.deleteRemoteOnLocalDelete") };
+    private readonly CheckBox _chkSyncOrganizeByAlbum = new() { Text = Loc.T("sync.organizeByAlbum") };
 
     public AppConfig? ResultConfig { get; private set; }
 
@@ -117,6 +124,7 @@ public sealed class SettingsForm : Form
         AddTab(tabStrip, tabHost, Loc.T("settings.tabGeneral"), BuildGeneralTab);
         AddTab(tabStrip, tabHost, Loc.T("settings.tabServer"), BuildServerTab);
         AddTab(tabStrip, tabHost, Loc.T("settings.tabFolders"), BuildFoldersTab);
+        AddTab(tabStrip, tabHost, Loc.T("sync.tabTitle"), BuildDownloadsTab);
         AddTab(tabStrip, tabHost, Loc.T("settings.updatesLabel"), BuildUpdatesTab);
 
         // Keskeneraisella konfiguraatiolla Palvelin-valilehti on se mita kayttaja oikeasti
@@ -276,6 +284,59 @@ public sealed class SettingsForm : Form
         AddRow(table, _treeExclusions, percentHeight: 70);
     }
 
+    private void BuildDownloadsTab(Panel page)
+    {
+        var table = CreateTabTable();
+        page.Controls.Add(table);
+
+        _chkSyncEnabled.AutoSize = true;
+        StyleCheckBox(_chkSyncEnabled);
+        AddRow(table, _chkSyncEnabled);
+
+        AddRow(table, MakeLabel(Loc.T("sync.photoFolderLabel"), new Padding(0, 14, 0, 2)));
+        var photoFolderPanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0), BackColor = _palette.Background };
+        StyleTextBox(_txtSyncPhotoFolder);
+        _txtSyncPhotoFolder.Width = 300;
+        var btnChoosePhotoFolder = StyleButton(new Button { Text = Loc.T("sync.chooseFolder"), AutoSize = true });
+        btnChoosePhotoFolder.Click += (_, _) => ChooseSyncFolder(_txtSyncPhotoFolder);
+        photoFolderPanel.Controls.Add(_txtSyncPhotoFolder);
+        photoFolderPanel.Controls.Add(btnChoosePhotoFolder);
+        AddRow(table, photoFolderPanel);
+
+        AddRow(table, MakeLabel(Loc.T("sync.videoFolderLabel"), new Padding(0, 12, 0, 2)));
+        var videoFolderPanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0), BackColor = _palette.Background };
+        StyleTextBox(_txtSyncVideoFolder);
+        _txtSyncVideoFolder.Width = 300;
+        var btnChooseVideoFolder = StyleButton(new Button { Text = Loc.T("sync.chooseFolder"), AutoSize = true });
+        btnChooseVideoFolder.Click += (_, _) => ChooseSyncFolder(_txtSyncVideoFolder);
+        videoFolderPanel.Controls.Add(_txtSyncVideoFolder);
+        videoFolderPanel.Controls.Add(btnChooseVideoFolder);
+        AddRow(table, videoFolderPanel);
+
+        AddRow(table, MakeLabel(Loc.T("sync.modeLabel"), new Padding(0, 14, 0, 2)));
+        var modePanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0), BackColor = _palette.Background };
+        _rdoSyncThumbnail.AutoSize = true;
+        _rdoSyncThumbnail.Margin = new Padding(0, 0, 16, 0);
+        _rdoSyncOriginal.AutoSize = true;
+        StyleRadioButton(_rdoSyncThumbnail);
+        StyleRadioButton(_rdoSyncOriginal);
+        modePanel.Controls.Add(_rdoSyncThumbnail);
+        modePanel.Controls.Add(_rdoSyncOriginal);
+        AddRow(table, modePanel);
+
+        _chkSyncDeleteRemote.AutoSize = true;
+        _chkSyncDeleteRemote.Margin = new Padding(0, 14, 0, 2);
+        StyleCheckBox(_chkSyncDeleteRemote);
+        AddRow(table, _chkSyncDeleteRemote);
+
+        _chkSyncOrganizeByAlbum.AutoSize = true;
+        _chkSyncOrganizeByAlbum.Margin = new Padding(0, 6, 0, 2);
+        StyleCheckBox(_chkSyncOrganizeByAlbum);
+        AddRow(table, _chkSyncOrganizeByAlbum);
+
+        AddRow(table, MakeLabel(Loc.T("sync.info"), new Padding(0, 16, 0, 2), wrapHeight: 48));
+    }
+
     private void BuildUpdatesTab(Panel page)
     {
         var table = CreateTabTable();
@@ -375,6 +436,13 @@ public sealed class SettingsForm : Form
         c.UseVisualStyleBackColor = false;
     }
 
+    private void StyleRadioButton(RadioButton r)
+    {
+        r.ForeColor = _palette.Text;
+        r.BackColor = _palette.Background;
+        r.UseVisualStyleBackColor = false;
+    }
+
     private Button StyleButton(Button b)
     {
         b.FlatStyle = FlatStyle.Flat;
@@ -427,6 +495,14 @@ public sealed class SettingsForm : Form
 
         _lstDirectories.Items.Clear();
         foreach (var dir in _directories) _lstDirectories.Items.Add(dir);
+
+        _chkSyncEnabled.Checked = _initialConfig.SyncEnabled;
+        _txtSyncPhotoFolder.Text = _initialConfig.SyncPhotoFolder;
+        _txtSyncVideoFolder.Text = _initialConfig.SyncVideoFolder;
+        if (_initialConfig.SyncMode == "Original") _rdoSyncOriginal.Checked = true;
+        else _rdoSyncThumbnail.Checked = true;
+        _chkSyncDeleteRemote.Checked = _initialConfig.SyncDeleteRemoteOnLocalDelete;
+        _chkSyncOrganizeByAlbum.Checked = _initialConfig.SyncOrganizeByAlbum;
     }
 
     private void OnAddDirectoryClicked(object? sender, EventArgs e)
@@ -445,6 +521,31 @@ public sealed class SettingsForm : Form
         _lstDirectories.Items.Add(path);
         RefreshExclusionTree();
     }
+
+    private void ChooseSyncFolder(TextBox target)
+    {
+        using var dialog = new FolderBrowserDialog { Description = Loc.T("sync.chooseFolderDialog") };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        target.Text = dialog.SelectedPath;
+    }
+
+    /// Estaa latauskansion paallekkaisuuden minka tahansa tarkkailtavan (lataus-Immichiin)
+    /// kansion kanssa - muuten jokainen ladattu tiedosto tunnistettaisiin heti uutena
+    /// paikallisena tiedostona ja ladattaisiin takaisin Immichiin, loputtomassa silmukassa.
+    private bool IsSyncFolderOverlappingWatched(string syncFolder)
+    {
+        var normalizedSync = NormalizeFolderPath(syncFolder);
+        foreach (var dir in _directories)
+        {
+            var normalizedDir = NormalizeFolderPath(dir);
+            if (string.Equals(normalizedSync, normalizedDir, StringComparison.OrdinalIgnoreCase)) return true;
+            if (normalizedSync.StartsWith(normalizedDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return true;
+            if (normalizedDir.StartsWith(normalizedSync + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    private static string NormalizeFolderPath(string path) => Path.GetFullPath(path).TrimEnd('\\', '/');
 
     private void OnRemoveDirectoryClicked(object? sender, EventArgs e)
     {
@@ -650,6 +751,29 @@ public sealed class SettingsForm : Form
             return;
         }
 
+        var syncPhotoFolder = _txtSyncPhotoFolder.Text.Trim();
+        var syncVideoFolder = _txtSyncVideoFolder.Text.Trim();
+        if (_chkSyncEnabled.Checked)
+        {
+            if (string.IsNullOrWhiteSpace(syncPhotoFolder) || string.IsNullOrWhiteSpace(syncVideoFolder))
+            {
+                MessageBox.Show(this, Loc.T("sync.missingFolder"), Loc.T("app.name"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // Overlap is safe now (downloaded files are marked "known" in the shared upload
+            // history, so the watcher never re-uploads them - see PhotoSyncService), but it still
+            // mixes small preview files in with the user's real originals if they're not careful,
+            // so ask rather than silently allowing or silently blocking.
+            if (IsSyncFolderOverlappingWatched(syncPhotoFolder) || IsSyncFolderOverlappingWatched(syncVideoFolder))
+            {
+                var proceed = MessageBox.Show(this, Loc.T("sync.folderOverlapsWatched"), Loc.T("app.name"),
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (proceed != DialogResult.Yes) return;
+            }
+        }
+
         var excludeDirectories = new List<string>();
         foreach (TreeNode rootNode in _treeExclusions.Nodes)
         {
@@ -671,6 +795,12 @@ public sealed class SettingsForm : Form
             ExcludeDirectories = excludeDirectories,
             Theme = theme,
             Language = language,
+            SyncEnabled = _chkSyncEnabled.Checked,
+            SyncPhotoFolder = syncPhotoFolder,
+            SyncVideoFolder = syncVideoFolder,
+            SyncMode = _rdoSyncOriginal.Checked ? "Original" : "Thumbnail",
+            SyncDeleteRemoteOnLocalDelete = _chkSyncDeleteRemote.Checked,
+            SyncOrganizeByAlbum = _chkSyncOrganizeByAlbum.Checked,
         };
 
         if (_chkStartWithWindows.Checked) AutoStartService.Enable();
@@ -713,7 +843,7 @@ public sealed class SettingsForm : Form
 
     private async void OnDownloadAndInstallClicked(object? sender, EventArgs e)
     {
-        if (_pendingUpdate?.DownloadUrl is not { } downloadUrl) return;
+        if (_pendingUpdate is not { DownloadUrl: { } downloadUrl } pendingUpdate) return;
 
         var confirm = MessageBox.Show(this, Loc.T("settings.updateInstallConfirm"), Loc.T("app.name"),
             MessageBoxButtons.YesNo, MessageBoxIcon.Question);
@@ -721,24 +851,47 @@ public sealed class SettingsForm : Form
 
         _btnDownloadUpdate.Enabled = false;
         var fileName = Path.GetFileName(new Uri(downloadUrl).LocalPath);
+        string installerPath;
 
         try
         {
-            var installerPath = await _updateService.DownloadInstallerAsync(downloadUrl, fileName, (done, total) =>
+            installerPath = await _updateService.DownloadInstallerAsync(downloadUrl, fileName, (done, total) =>
             {
                 var percent = total > 0 ? (int)(done * 100 / total) : 0;
                 _lblUpdateResult.ForeColor = _palette.Text;
                 _lblUpdateResult.Text = Loc.T("settings.downloadingUpdate", percent);
             });
-
-            Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
-            _onExitRequested();
         }
         catch (Exception ex)
         {
             _lblUpdateResult.ForeColor = Color.Firebrick;
             _lblUpdateResult.Text = Loc.T("settings.updateDownloadFailed", ex.Message);
             _btnDownloadUpdate.Enabled = true;
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
+            _onExitRequested();
+        }
+        catch (Exception)
+        {
+            // Windows Defender/SmartScreen not infrequently quarantines unsigned, self-contained
+            // .NET executables as a false positive (e.g. "Trojan:Win32/Wacatac.B!ml") right as
+            // they're launched, even though the download itself succeeded moments earlier - a
+            // known limitation of this project's unsigned build, not something this code can fix
+            // (see the "Reduce antivirus false positives" commit). Point at the release page
+            // instead of surfacing the raw exception, so the user has somewhere to go.
+            _lblUpdateResult.ForeColor = Color.Firebrick;
+            _lblUpdateResult.Text = Loc.T("settings.updateLaunchBlocked");
+            _btnDownloadUpdate.Enabled = true;
+
+            if (pendingUpdate.ReleaseUrl is { } releaseUrl)
+            {
+                try { Process.Start(new ProcessStartInfo(releaseUrl) { UseShellExecute = true }); }
+                catch { /* best effort */ }
+            }
         }
     }
 }
