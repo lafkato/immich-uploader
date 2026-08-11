@@ -14,7 +14,7 @@
     <RootNamespace>ImmichUploaderApp</RootNamespace>
     <!-- Overridden at release build time via -p:Version=X.Y.Z from the same git tag that
          drives the Inno Setup installer version (see release.yml / ImmichUploader.iss). -->
-    <Version>1.2.1</Version>
+    <Version>1.2.2</Version>
     <ApplicationIcon>Resources\icon.ico</ApplicationIcon>
 
     <!-- Publish: self-contained folder deployment, no separate .NET runtime install needed.

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using ImmichUploaderApp.Models;
 using Timer = System.Threading.Timer;
 
@@ -47,7 +48,43 @@ public sealed class PhotoSyncService : IDisposable
     /// uploadHistory is shared with UploadWatcherService when provided: every file downloaded
     /// here gets marked "known" in it, so it's never re-uploaded even if the sync and watched
     /// folders overlap - see UploadWatcherService's matching constructor comment.
-    public PhotoSyncService(UploadHistoryStore? uploadHistory = null) => _uploadHistory = uploadHistory ?? new();
+    public PhotoSyncService(UploadHistoryStore? uploadHistory = null)
+    {
+        _uploadHistory = uploadHistory ?? new();
+        LoadRecentActivity();
+    }
+
+    // Persisted so the activity panel still shows real history after a restart - these lists used
+    // to be purely in-memory, which made "Vastaanotetut"/"Poistetut" look empty on every relaunch
+    // even when the previous session had genuinely downloaded or deleted files, since a full
+    // library is normally already up to date and produces no *new* activity to repopulate them.
+    private void LoadRecentActivity()
+    {
+        try
+        {
+            if (!File.Exists(ConfigService.SyncRecentActivityPath)) return;
+            var data = JsonSerializer.Deserialize<RecentActivityData>(File.ReadAllText(ConfigService.SyncRecentActivityPath));
+            if (data is null) return;
+            if (data.Downloads is not null) _recentDownloads.AddRange(data.Downloads);
+            if (data.Deletions is not null) _recentDeletions.AddRange(data.Deletions);
+        }
+        catch (Exception ex) { AppLogger.Log($"VAROITUS: viimeisimpien latausten luku epaonnistui: {ex.Message}"); }
+    }
+
+    private void SaveRecentActivityLocked()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(ConfigService.SyncRecentActivityPath)!);
+            var json = JsonSerializer.Serialize(new RecentActivityData(_recentDownloads, _recentDeletions));
+            var tempPath = ConfigService.SyncRecentActivityPath + ".tmp";
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, ConfigService.SyncRecentActivityPath, overwrite: true);
+        }
+        catch (Exception ex) { AppLogger.Log($"VAROITUS: viimeisimpien latausten tallennus epaonnistui: {ex.Message}"); }
+    }
+
+    private sealed record RecentActivityData(List<RecentDownload> Downloads, List<RecentDeletion> Deletions);
 
     public event Action<PhotoSyncActivitySnapshot>? ActivityChanged;
     public bool IsRunning => _cts is { IsCancellationRequested: false };
@@ -74,6 +111,7 @@ public sealed class PhotoSyncService : IDisposable
         {
             _recentDeletions.Insert(0, new RecentDeletion(fileName, DateTime.Now, reason));
             if (_recentDeletions.Count > MaxRecentDeletions) _recentDeletions.RemoveRange(MaxRecentDeletions, _recentDeletions.Count - MaxRecentDeletions);
+            SaveRecentActivityLocked();
         }
     }
 
@@ -362,6 +400,7 @@ public sealed class PhotoSyncService : IDisposable
         {
             _recentDownloads.Insert(0, new RecentDownload(Path.GetFileName(path), DateTime.Now, info.Exists ? info.Length : 0, thumbnail));
             if (_recentDownloads.Count > MaxRecentDownloads) _recentDownloads.RemoveRange(MaxRecentDownloads, _recentDownloads.Count - MaxRecentDownloads);
+            SaveRecentActivityLocked();
         }
     }
 

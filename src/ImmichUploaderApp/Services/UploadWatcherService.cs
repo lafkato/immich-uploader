@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Threading.Channels;
 using ImmichUploaderApp.Models;
 using Timer = System.Threading.Timer;
@@ -48,7 +49,43 @@ public sealed class UploadWatcherService : IDisposable
     /// history is shared with PhotoSyncService when provided, so files it downloads (marked
     /// known there) are never picked up here as "new" local files and re-uploaded - the same
     /// store, not just the same schema, is what makes that safe.
-    public UploadWatcherService(UploadHistoryStore? history = null) => _history = history ?? new();
+    public UploadWatcherService(UploadHistoryStore? history = null)
+    {
+        _history = history ?? new();
+        LoadRecentActivity();
+    }
+
+    // Persisted for the same reason as PhotoSyncService's matching lists (see its
+    // LoadRecentActivity comment): without this, "Viimeisimmät" looks empty after every restart
+    // even though real uploads happened in a previous session, because there's normally nothing
+    // *new* left to upload once the watched folders are already in sync.
+    private void LoadRecentActivity()
+    {
+        try
+        {
+            if (!File.Exists(ConfigService.UploadRecentActivityPath)) return;
+            var data = JsonSerializer.Deserialize<RecentActivityData>(File.ReadAllText(ConfigService.UploadRecentActivityPath));
+            if (data is null) return;
+            if (data.Uploads is not null) _recentUploads.AddRange(data.Uploads);
+            if (data.Failures is not null) _recentFailures.AddRange(data.Failures);
+        }
+        catch (Exception ex) { AppLogger.Log($"VAROITUS: viimeisimpien latausten luku epaonnistui: {ex.Message}"); }
+    }
+
+    private void SaveRecentActivityLocked()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(ConfigService.UploadRecentActivityPath)!);
+            var json = JsonSerializer.Serialize(new RecentActivityData(_recentUploads, _recentFailures));
+            var tempPath = ConfigService.UploadRecentActivityPath + ".tmp";
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, ConfigService.UploadRecentActivityPath, overwrite: true);
+        }
+        catch (Exception ex) { AppLogger.Log($"VAROITUS: viimeisimpien latausten tallennus epaonnistui: {ex.Message}"); }
+    }
+
+    private sealed record RecentActivityData(List<RecentUpload> Uploads, List<RecentFailure> Failures);
 
     public event Action<WatcherActivitySnapshot>? ActivityChanged;
     public bool IsRunning => _cts is { IsCancellationRequested: false };
@@ -295,6 +332,7 @@ public sealed class UploadWatcherService : IDisposable
             _currentFileName = null; _currentFileProgressPercent = null;
             _recentUploads.Insert(0, new RecentUpload(fileName, DateTime.Now, info.Length, thumbnail));
             if (_recentUploads.Count > MaxRecentUploads) _recentUploads.RemoveRange(MaxRecentUploads, _recentUploads.Count - MaxRecentUploads);
+            SaveRecentActivityLocked();
         }
         lock (_queueLock) _retryAttempts.Remove(path);
         AppLogger.Log($"LADATTU ({response.Status}): {path} -> {response.Id}");
@@ -345,6 +383,7 @@ public sealed class UploadWatcherService : IDisposable
         {
             _recentFailures.Insert(0, new RecentFailure(Path.GetFileName(path), message, DateTime.Now, willRetry));
             if (_recentFailures.Count > MaxRecentFailures) _recentFailures.RemoveRange(MaxRecentFailures, _recentFailures.Count - MaxRecentFailures);
+            SaveRecentActivityLocked();
         }
         RaiseActivity(willRetry ? Loc.T("status.queued", GetQueueCount()) : Loc.T("status.idle"));
     }
