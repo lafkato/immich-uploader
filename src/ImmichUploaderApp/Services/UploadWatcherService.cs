@@ -233,15 +233,31 @@ public sealed class UploadWatcherService : IDisposable
         await foreach (var path in reader.ReadAllAsync(ct))
         {
             try { await ProcessFileAsync(path, ct); }
-            catch (OperationCanceledException) { throw; }
+            // Only a real shutdown (ct itself canceled) should stop the consumer. HttpClient's own
+            // request timeout also throws OperationCanceledException (a TaskCanceledException) even
+            // though ct was never canceled - previously that was mistaken for shutdown and rethrown
+            // here, silently killing this loop forever on the very first slow/unreachable-server
+            // upload: the queue kept filling from file scans but nothing ever drained it again.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { HandleProcessingFailure(path, ex, ct); }
-            finally { lock (_queueLock) _pendingPaths.Remove(path); }
+            // Refreshes the displayed queue count even when ProcessFileAsync took the silent
+            // already-uploaded fast path below (no RaiseActivity of its own) - otherwise the UI
+            // count freezes at whatever it was when the queue last filled up, even though the
+            // queue is actually draining underneath, and looks stuck.
+            finally { lock (_queueLock) _pendingPaths.Remove(path); RaiseActivity(GetQueueCount() > 0 ? Loc.T("status.queued", GetQueueCount()) : Loc.T("status.idle")); }
         }
     }
 
     private async Task ProcessFileAsync(string path, CancellationToken ct)
     {
         if (_client is null || !File.Exists(path) || _paused) return;
+        // Cheap path+size+timestamp check first: on every restart the safety poll re-enqueues the
+        // whole watched tree, and most of it is usually already-uploaded files. Checking the cache
+        // with a plain FileInfo (no I/O beyond a stat) lets those skip the stability wait below
+        // entirely, instead of paying its mandatory 3s delay per file for hundreds of files that
+        // don't need to be touched at all.
+        var quickInfo = new FileInfo(path);
+        if (quickInfo.Exists && _history.TryGetUploadedHash(path, quickInfo, out _)) return;
         var info = await WaitForStableFileAsync(path, ct);
         if (_history.TryGetUploadedHash(path, info, out _)) return;
         var sha1 = await UploadHistoryStore.ComputeSha1Async(path, ct);
