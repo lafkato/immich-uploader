@@ -330,7 +330,7 @@ public sealed class UploadWatcherService : IDisposable
         lock (_activityLock)
         {
             _currentFileName = null; _currentFileProgressPercent = null;
-            _recentUploads.Insert(0, new RecentUpload(fileName, DateTime.Now, info.Length, thumbnail));
+            _recentUploads.Insert(0, new RecentUpload(fileName, DateTime.Now, info.Length, thumbnail, path));
             if (_recentUploads.Count > MaxRecentUploads) _recentUploads.RemoveRange(MaxRecentUploads, _recentUploads.Count - MaxRecentUploads);
             SaveRecentActivityLocked();
         }

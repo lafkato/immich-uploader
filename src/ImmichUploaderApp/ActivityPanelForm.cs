@@ -368,7 +368,7 @@ public sealed class ActivityPanelForm : Form
         }
         else
         {
-            AddActivityRows(_lastUploads.Select(u => (u.FileName, u.UploadedAtLocal, u.SizeBytes, u.ThumbnailPng)), rowWidth);
+            AddActivityRows(_lastUploads.Select(u => (u.FileName, u.UploadedAtLocal, u.SizeBytes, u.ThumbnailPng, u.FullPath)), rowWidth);
         }
 
         AddSectionHeader(Loc.T("panel.downloadsHeader"), topMargin: 14);
@@ -378,7 +378,7 @@ public sealed class ActivityPanelForm : Form
         }
         else
         {
-            AddActivityRows(_lastDownloads.Select(d => (d.FileName, d.DownloadedAtLocal, d.SizeBytes, d.ThumbnailPng)), rowWidth);
+            AddActivityRows(_lastDownloads.Select(d => (d.FileName, d.DownloadedAtLocal, d.SizeBytes, d.ThumbnailPng, d.FullPath)), rowWidth);
         }
 
         AddSectionHeader(Loc.T("panel.deletionsHeader"), topMargin: 14);
@@ -443,18 +443,18 @@ public sealed class ActivityPanelForm : Form
         });
     }
 
-    private void AddActivityRows(IEnumerable<(string FileName, DateTime AtLocal, long SizeBytes, byte[]? ThumbnailPng)> items, int rowWidth)
+    private void AddActivityRows(IEnumerable<(string FileName, DateTime AtLocal, long SizeBytes, byte[]? ThumbnailPng, string? FullPath)> items, int rowWidth)
     {
         var isFirst = true;
         foreach (var item in items)
         {
             if (!isFirst) _recentList.Controls.Add(new Panel { Width = rowWidth, Height = 1, BackColor = _palette.Divider, Margin = new Padding(0, 2, 0, 2) });
             isFirst = false;
-            _recentList.Controls.Add(BuildActivityRow(item.FileName, item.AtLocal, item.ThumbnailPng, rowWidth));
+            _recentList.Controls.Add(BuildActivityRow(item.FileName, item.AtLocal, item.ThumbnailPng, item.FullPath, rowWidth));
         }
     }
 
-    private Control BuildActivityRow(string fileName, DateTime atLocal, byte[]? thumbnailPng, int rowWidth)
+    private Control BuildActivityRow(string fileName, DateTime atLocal, byte[]? thumbnailPng, string? fullPath, int rowWidth)
     {
         var row = new Panel
         {
@@ -499,7 +499,76 @@ public sealed class ActivityPanelForm : Form
         row.Controls.Add(thumbBox);
         row.Controls.Add(nameLabel);
         row.Controls.Add(timeLabel);
+
+        // Every row is clickable. Rows persisted by an older version have no stored path, so the file
+        // is looked up by name in the configured folders when clicked (see OpenActivityFileAsync).
+        var parts = new Control[] { row, thumbBox, nameLabel, timeLabel };
+        foreach (var control in parts)
+        {
+            control.Cursor = Cursors.Hand;
+            control.Click += (_, _) => _ = OpenActivityFileAsync(fileName, fullPath);
+            // Hover highlight so it is obvious the row can be clicked. Child controls fire their own
+            // enter/leave, so only un-highlight once the pointer has really left the whole row.
+            control.MouseEnter += (_, _) => row.BackColor = _palette.ControlBackground;
+            control.MouseLeave += (_, _) =>
+            {
+                if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position))) row.BackColor = _palette.Background;
+            };
+        }
         return row;
+    }
+
+    // Same media types the uploader handles. File names of downloaded assets come from the server
+    // (possibly another user's shared album), so anything else - e.g. a "photo.cmd" - must never be
+    // handed to ShellExecute from a click.
+    private static readonly HashSet<string> OpenableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".bmp", ".tiff", ".webp", ".dng", ".cr2", ".nef", ".arw",
+        ".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v", ".3gp",
+    };
+
+    /// Uses the stored full path when there is one; otherwise (rows saved before paths were recorded)
+    /// searches the sync and watched folders for a file with that name. The search runs off the UI
+    /// thread since those folders can hold thousands of files.
+    private async Task OpenActivityFileAsync(string fileName, string? fullPath)
+    {
+        try
+        {
+            var path = !string.IsNullOrEmpty(fullPath) ? fullPath : await Task.Run(() => FindByName(fileName));
+            if (path is null) { AppLogger.Log($"VAROITUS: tiedostoa '{fileName}' ei loydy avattavaksi."); return; }
+            OpenFile(path);
+        }
+        catch (Exception ex) { AppLogger.Log($"VAROITUS: tiedoston '{fileName}' avaaminen epaonnistui: {ex.Message}"); }
+    }
+
+    private string? FindByName(string fileName)
+    {
+        if (fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return null;
+        var roots = new[] { _config.SyncPhotoFolder, _config.SyncVideoFolder }
+            .Concat(_config.Directories)
+            .Where(r => !string.IsNullOrWhiteSpace(r) && Directory.Exists(r))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in roots)
+        {
+            try
+            {
+                var match = Directory.EnumerateFiles(root, fileName, SearchOption.AllDirectories).FirstOrDefault();
+                if (match is not null) return match;
+            }
+            catch (Exception ex) { AppLogger.Log($"VAROITUS: kansion '{root}' haku epaonnistui: {ex.Message}"); }
+        }
+        return null;
+    }
+
+    private static void OpenFile(string path)
+    {
+        try
+        {
+            if (!OpenableExtensions.Contains(Path.GetExtension(path))) { AppLogger.Log($"VAROITUS: tiedostotyyppia ei avata: '{path}'."); return; }
+            if (!File.Exists(path)) { AppLogger.Log($"VAROITUS: tiedostoa '{path}' ei loydy avattavaksi."); return; }
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex) { AppLogger.Log($"VAROITUS: tiedoston '{path}' avaaminen epaonnistui: {ex.Message}"); }
     }
 
     /// No thumbnail (the file is gone by the time this renders, whichever side deleted it first)

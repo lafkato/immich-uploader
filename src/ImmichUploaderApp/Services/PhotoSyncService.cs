@@ -398,7 +398,7 @@ public sealed class PhotoSyncService : IDisposable
 
         lock (_activityLock)
         {
-            _recentDownloads.Insert(0, new RecentDownload(Path.GetFileName(path), DateTime.Now, info.Exists ? info.Length : 0, thumbnail));
+            _recentDownloads.Insert(0, new RecentDownload(Path.GetFileName(path), DateTime.Now, info.Exists ? info.Length : 0, thumbnail, path));
             if (_recentDownloads.Count > MaxRecentDownloads) _recentDownloads.RemoveRange(MaxRecentDownloads, _recentDownloads.Count - MaxRecentDownloads);
             SaveRecentActivityLocked();
         }
