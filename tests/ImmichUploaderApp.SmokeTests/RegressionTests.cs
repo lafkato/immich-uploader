@@ -137,12 +137,55 @@ internal static class RegressionTests
                     check(uploadLabel.Text.Contains("123"), "Upload scanning shows live examined-file count");
                     downloadHandler.Invoke(panel, new object[] { new PhotoSyncActivitySnapshot("scan", Array.Empty<RecentDownload>(), Array.Empty<RecentDeletion>(), true, 42, 3, "example.jpg", 50, 1048576) });
                     check(downloadLabel.Text.Contains("example.jpg") && downloadLabel.Text.Contains("50%"), "Download activity exposes current file and progress");
+                    var recentUploads = new[] { new RecentUpload("sent.jpg", DateTime.Now, 100, null) };
+                    var recentDownloads = new[] { new RecentDownload("received.jpg", DateTime.Now, 200, null) };
+                    uploadHandler.Invoke(panel, new object[] { new WatcherActivitySnapshot("idle", null, null, 0, recentUploads, Array.Empty<RecentFailure>(), LastScanAtLocal: DateTime.Now) });
+                    downloadHandler.Invoke(panel, new object[] { new PhotoSyncActivitySnapshot("idle", recentDownloads, Array.Empty<RecentDeletion>(), LastScanAtLocal: DateTime.Now) });
+                    var selectActivity = typeof(ActivityPanelForm).GetMethod("SelectActivity", Private)!;
+                    selectActivity.Invoke(panel, new object[] { 2 });
+                    var visibleNames = list.Controls.Cast<Control>().SelectMany(c => c.Controls.OfType<Label>()).Select(c => c.Text).ToArray();
+                    check(visibleNames.Contains("received.jpg") && !visibleNames.Contains("sent.jpg"), "Download navigation filters the mixed timeline correctly");
+                    selectActivity.Invoke(panel, new object[] { 0 });
+                    check(list.Controls.Count == 2, "Overview restores both transfer directions");
+                    var pause = (Button)typeof(ActivityPanelForm).GetField("_pauseButton", Private)!.GetValue(panel)!;
+                    pause.PerformClick();
+                    check(panelWatcher.IsPaused && uploadLabel.Text.Contains(Loc.T("status.paused")), "Dashboard pause action updates service and live status");
+                    pause.PerformClick();
+                    check(!panelWatcher.IsPaused, "Dashboard resume action resumes the watcher");
                     if (Environment.GetEnvironmentVariable("IMMICH_ACTIVITY_PREVIEW") is { } preview)
                     {
-                        panel.PerformLayout();
-                        using var bitmap = new System.Drawing.Bitmap(panel.Width, panel.Height);
-                        panel.DrawToBitmap(bitmap, new System.Drawing.Rectangle(0, 0, panel.Width, panel.Height));
-                        bitmap.Save(preview);
+                        void Capture(Form window, string file)
+                        {
+                            window.PerformLayout(); Application.DoEvents();
+                            using var bitmap = new System.Drawing.Bitmap(window.Width, window.Height);
+                            window.DrawToBitmap(bitmap, new System.Drawing.Rectangle(0, 0, window.Width, window.Height));
+                            bitmap.Save(file);
+                        }
+                        using var thumbnail = new System.Drawing.Bitmap(60, 60);
+                        using (var graphics = System.Drawing.Graphics.FromImage(thumbnail))
+                        {
+                            graphics.Clear(System.Drawing.Color.FromArgb(76, 140, 184));
+                            using var brush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(53, 85, 94));
+                            graphics.FillPolygon(brush, new[] { new System.Drawing.Point(0, 60), new System.Drawing.Point(25, 17), new System.Drawing.Point(60, 60) });
+                        }
+                        using var imageBytes = new MemoryStream(); thumbnail.Save(imageBytes, System.Drawing.Imaging.ImageFormat.Png);
+                        var uploads = new[] { new RecentUpload("Kesäretki.jpg", DateTime.Now.AddMinutes(-2), 5821440, imageBytes.ToArray()) };
+                        var downloads = new[] { new RecentDownload("example.jpg", DateTime.Now.AddMinutes(-5), 3284992, imageBytes.ToArray()) };
+                        var uploadSnapshot = new WatcherActivitySnapshot("idle", null, null, 7, uploads, Array.Empty<RecentFailure>(), true, 123);
+                        var downloadSnapshot = new PhotoSyncActivitySnapshot("scan", downloads, Array.Empty<RecentDeletion>(), true, 42, 3, "example.jpg", 50, 1048576);
+                        uploadHandler.Invoke(panel, new object[] { uploadSnapshot }); downloadHandler.Invoke(panel, new object[] { downloadSnapshot });
+                        Capture(panel, preview);
+                        panel.ClientSize = new System.Drawing.Size(840, 600); Capture(panel, preview + ".compact.png");
+                        using var light = new ActivityPanelForm(panelWatcher, panelSync, new AppConfig { Theme = "Light", SyncEnabled = true, ServerUrl = "https://photos.example.test/api" }, () => { });
+                        light.Show(); Application.DoEvents();
+                        uploadHandler.Invoke(light, new object[] { uploadSnapshot }); downloadHandler.Invoke(light, new object[] { downloadSnapshot });
+                        Capture(light, preview + ".light.png");
+                        form.Show(); Application.DoEvents();
+                        for (var tab = 0; tab < 5; tab++)
+                        {
+                            typeof(SettingsForm).GetMethod("SelectTab", Private)!.Invoke(form, new object[] { tab });
+                            Capture(form, preview + $".settings-{tab}.png");
+                        }
                     }
                     downloadHandler.Invoke(panel, new object[] { new PhotoSyncActivitySnapshot("idle", Array.Empty<RecentDownload>(), Array.Empty<RecentDeletion>(), false, 42, 3, LastScanAtLocal: DateTime.Now) });
                     check(downloadLabel.Text.Contains(Loc.T("activity.idle")), "Finished download scan explicitly shows no pending transfer");

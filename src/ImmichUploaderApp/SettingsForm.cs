@@ -51,6 +51,7 @@ public sealed class SettingsForm : Form
         // joka lomakkeelle) - asetetaan se eksplisiittisesti koska lomake rakennetaan
         // koodissa ilman Designeria, jolloin oletusarvo ei muuten periydy oikein.
         AutoScaleMode = AutoScaleMode.Font;
+        Font = new Font("Segoe UI", 9.5f);
 
         Text = Loc.T("settings.title");
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
@@ -71,125 +72,75 @@ public sealed class SettingsForm : Form
         // the window gets a sensible default size instead of auto-fitting to content height,
         // clamped to the working area; anything that doesn't fit scrolls within the panel.
         var workingArea = Screen.FromControl(this).WorkingArea;
-        MinimumSize = new Size(520, 380);
-        MaximumSize = new Size(
-            Math.Min(720, workingArea.Width - 40),
-            Math.Max(300, workingArea.Height - 40));
-        ClientSize = new Size(
-            Math.Min(580, MaximumSize.Width),
-            Math.Min(700, MaximumSize.Height));
+        MinimumSize = new Size(860, 620);
+        ClientSize = new Size(Math.Min(1000, workingArea.Width - 60), Math.Min(740, workingArea.Height - 80));
 
     }
+
+    private readonly List<Button> _tabHeaders = new();
+    private readonly List<Panel> _tabPages = new();
+    private Label _pageTitle = null!, _pageHint = null!;
+    private int _selectedTabIndex;
+    private readonly string[] _hints = { "design.generalHint", "design.serverHint", "design.foldersHint", "design.downloadsHint", "design.updatesHint" };
 
     private void BuildLayout()
     {
-        // Painikkeet AutoSize+MinimumSize -yhdistelmalla: teksti ei koskaan leikkaudu,
-        // riippumatta fontin koosta, kielesta tai DPI-skaalauksesta.
-        var btnCancel = MakeDialogButton(Loc.T("settings.cancel"));
-        btnCancel.DialogResult = DialogResult.Cancel;
-        var btnSave = MakeDialogButton(Loc.T("settings.save"));
-        btnSave.Click += OnSaveClicked;
-
-        // Alaosan Tallenna/Peruuta-painikkeet omaan Dock=Bottom-paneeliin niin ne
-        // pysyvat aina nakyvissa riippumatta siita mika valilehti on auki.
-        var actionBar = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Bottom,
-            FlowDirection = FlowDirection.RightToLeft,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(12, 10, 12, 10),
-            BackColor = _palette.Background,
-        };
-        actionBar.Controls.Add(btnCancel);
-        actionBar.Controls.Add(btnSave);
-
-        // Kokonaan itse piirretty valilehtirivi natiivin TabControlin sijaan: comctl32:n
-        // TabControl piirtaa aina oman reunuksensa jokaisen valilehden ymparille riippumatta
-        // owner-drawista tai teemauksesta - todennettu elavalla kuvakaappauksella etta vaalea
-        // reunaviiva jai nakyviin jokaisen valilehden ymparille myos SetWindowTheme+WM_THEMECHANGED
-        // -yritysten jalkeen. Tavalliset Panel-otsikot omassa FlowLayoutPanelissa eivat piirra
-        // mitaan natiivia kehysta, joten ongelmaa ei voi ilmestya.
-        var tabStrip = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            Height = 42,
-            BackColor = _palette.Background,
-            Padding = new Padding(4, 0, 0, 0),
-        };
-        var tabHost = new Panel { Dock = DockStyle.Fill, BackColor = _palette.Background };
-
-        AddTab(tabStrip, tabHost, Loc.T("settings.tabGeneral"), BuildGeneralTab);
-        AddTab(tabStrip, tabHost, Loc.T("settings.tabServer"), BuildServerTab);
-        AddTab(tabStrip, tabHost, Loc.T("settings.tabFolders"), BuildFoldersTab);
-        AddTab(tabStrip, tabHost, Loc.T("sync.tabTitle"), BuildDownloadsTab);
-        AddTab(tabStrip, tabHost, Loc.T("settings.updatesLabel"), BuildUpdatesTab);
-
-        // Keskeneraisella konfiguraatiolla Palvelin-valilehti on se mita kayttaja oikeasti
-        // tarvitsee heti - sama ehto jolla TrayApplicationContext pakottaa tamun ikkunan auki.
+        var shell = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 218)); shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); Controls.Add(shell);
+        var navigation = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = _palette.ControlBackground, Padding = new Padding(20, 28, 16, 20), Margin = new Padding(0) };
+        navigation.Controls.Add(new Label { Text = "immich", AutoSize = true, Font = new Font("Segoe UI", 25, FontStyle.Bold), ForeColor = _palette.Text, Margin = new Padding(0, 0, 0, 8) });
+        navigation.Controls.Add(new Label { Text = Loc.T("panel.settingsButton"), AutoSize = true, ForeColor = _palette.TextMuted, Margin = new Padding(0, 0, 0, 28) });
+        shell.Controls.Add(navigation, 0, 0);
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(28, 28, 28, 20), Margin = new Padding(0), BackColor = _palette.Background };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 92)); content.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); content.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        shell.Controls.Add(content, 1, 0);
+        var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
+        heading.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); heading.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _pageTitle = new Label { Dock = DockStyle.Fill, Font = new Font("Segoe UI", 23, FontStyle.Bold), ForeColor = _palette.Text, Margin = new Padding(0) };
+        _pageHint = new Label { Dock = DockStyle.Fill, ForeColor = _palette.TextMuted, Margin = new Padding(0, 6, 0, 0) };
+        heading.Controls.Add(_pageTitle, 0, 0); heading.Controls.Add(_pageHint, 0, 1); content.Controls.Add(heading, 0, 0);
+        var host = new Panel { Dock = DockStyle.Fill, BackColor = _palette.Background, Margin = new Padding(0) };
+        content.Controls.Add(host, 0, 1);
+        AddTab(navigation, host, Loc.T("settings.tabGeneral"), BuildGeneralTab);
+        AddTab(navigation, host, Loc.T("settings.tabServer"), BuildServerTab);
+        AddTab(navigation, host, Loc.T("settings.tabFolders"), BuildFoldersTab);
+        AddTab(navigation, host, Loc.T("sync.tabTitle"), BuildDownloadsTab);
+        AddTab(navigation, host, Loc.T("settings.updatesLabel"), BuildUpdatesTab);
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 14, 0, 0), Margin = new Padding(0) };
+        var cancel = StyleButton(MakeDialogButton(Loc.T("settings.cancel"))); cancel.DialogResult = DialogResult.Cancel;
+        var save = StyleButton(MakeDialogButton(Loc.T("settings.save")));
+        save.BackColor = _palette.Accent; save.ForeColor = _palette.IsDark ? _palette.Background : Color.White; save.FlatAppearance.BorderSize = 0;
+        save.Click += OnSaveClicked; actions.Controls.Add(save); actions.Controls.Add(cancel);
+        content.Controls.Add(actions, 0, 2);
+        CancelButton = cancel;
         SelectTab(_initialConfig.IsConfigured ? 0 : 1);
-
-        // Dock-jarjestys on tarkea: Bottom/Top-ankkuroidut palkit pitaa lisata ENNEN
-        // Fill-ankkuroitua sisaltoa, muuten Fill peittaa ne.
-        Controls.Add(actionBar);
-        Controls.Add(tabStrip);
-        Controls.Add(tabHost);
-        AcceptButton = null;
-        CancelButton = btnCancel;
     }
 
-    private readonly List<Panel> _tabHeaders = new();
-    private readonly List<Panel> _tabPages = new();
-    private int _selectedTabIndex;
-
-    private void AddTab(FlowLayoutPanel tabStrip, Panel tabHost, string title, Action<Panel> build)
+    private void AddTab(FlowLayoutPanel navigation, Panel host, string title, Action<Panel> build)
     {
-        // Sivu rakennetaan aluksi NAKYVANA (ei Visible=false): TableLayoutPanelin ensimmainen
-        // AutoSize-rivi jaa 0px korkuiseksi jos koko sisalto taytetaan piilotettuun kontrolliin -
-        // WinForms ei suorita asettelulaskentaa piilossa oleville kontrolleille, ja rivi 0 ei
-        // ilmeisesti saa tata laskentaa jalkikateenkaan Visible=true -vaihdon yhteydessa (todennettu
-        // debug-punaisella taustavarilla, joka ei nakynyt ollenkaan). Piilotus tehdaan vasta
-        // SelectTab-kutsulla kun kaikki neljä valilehtea on jo rakennettu nakyvina.
-        var page = new Panel { Dock = DockStyle.Fill, BackColor = _palette.Background };
-        tabHost.Controls.Add(page);
-        build(page);
-        _tabPages.Add(page);
-
+        var page = new Panel { Dock = DockStyle.Fill, BackColor = _palette.Background, AutoScroll = true };
+        host.Controls.Add(page); build(page); _tabPages.Add(page);
         var index = _tabHeaders.Count;
-        var header = new Panel
-        {
-            Height = 42,
-            Width = TextRenderer.MeasureText(title, Font).Width + 32,
-            Cursor = Cursors.Hand,
-            BackColor = _palette.Background,
-            Margin = new Padding(0),
-        };
-        header.Paint += (_, e) => PaintTabHeader(e.Graphics, header, title, index == _selectedTabIndex);
-        header.Click += (_, _) => SelectTab(index);
-        tabStrip.Controls.Add(header);
-        _tabHeaders.Add(header);
-    }
-
-    private void PaintTabHeader(Graphics g, Panel header, string title, bool selected)
-    {
-        var textColor = selected ? _palette.Text : _palette.TextMuted;
-        TextRenderer.DrawText(g, title, Font, header.ClientRectangle, textColor,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-
-        if (selected)
-        {
-            using var accentBrush = new SolidBrush(_palette.Accent);
-            g.FillRectangle(accentBrush, 0, header.Height - 3, header.Width, 3);
-        }
+        var button = new Button { Text = title, Size = new Size(180, 44), FlatStyle = FlatStyle.Flat, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 4, 0), Margin = new Padding(0, 0, 0, 6), Cursor = Cursors.Hand, AccessibleName = title };
+        button.FlatAppearance.BorderSize = 0;
+        button.Click += (_, _) => SelectTab(index);
+        navigation.Controls.Add(button); _tabHeaders.Add(button);
     }
 
     private void SelectTab(int index)
     {
         _selectedTabIndex = index;
-        for (var i = 0; i < _tabPages.Count; i++) _tabPages[i].Visible = i == index;
-        foreach (var header in _tabHeaders) header.Invalidate();
+        _pageTitle.Text = _tabHeaders[index].Text;
+        _pageHint.Text = Loc.T(_hints[index]);
+        for (var i = 0; i < _tabPages.Count; i++)
+        {
+            _tabPages[i].Visible = i == index;
+            _tabHeaders[i].BackColor = i == index ? _palette.Track : _palette.ControlBackground;
+            _tabHeaders[i].ForeColor = i == index ? _palette.Accent : _palette.TextMuted;
+        }
+        _tabPages[index].BringToFront();
     }
 
     private void BuildGeneralTab(Panel page)
@@ -256,7 +207,7 @@ public sealed class SettingsForm : Form
 
     private void BuildFoldersTab(Panel page)
     {
-        var table = CreateTabTable();
+        var table = CreateTabTable(true);
         page.Controls.Add(table);
 
         AddRow(table, MakeLabel(Loc.T("settings.watchedFoldersLabel"), new Padding(0, 0, 0, 2)));
@@ -364,29 +315,21 @@ public sealed class SettingsForm : Form
     /// pitaa huolen etta rivit tayttavat aina valilehden todellisen leveyden riippumatta
     /// ikkunan koosta, fontin skaalauksesta tai kielen tekstien pituudesta - toisin kuin
     /// vanha versio jossa kontrollien leveys oli kovakoodattu eika reagoinut mihinkaan.
-    private TableLayoutPanel CreateTabTable()
+    private TableLayoutPanel CreateTabTable(bool fill = false)
     {
         var table = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = fill ? DockStyle.Fill : DockStyle.Top,
+            AutoSize = !fill,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
-            AutoScroll = true,
-            Padding = new Padding(16),
+            AutoScroll = false,
+            Padding = new Padding(0, 10, 0, 10),
             BackColor = _palette.Background,
         };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        // Workaround for a reproducible rendering quirk: content positioned in roughly the
-        // first ~80px below the tab strip never paints on first show, regardless of which
-        // control occupies it (tested with a Label, and with a Panel with a solid debug
-        // BackColor - both silently failed to appear despite correct Bounds/Visible/Parent,
-        // verified via both PrintWindow and CopyFromScreen captures). Neither reordering
-        // construction, disabling AutoScroll, nor a deferred PerformLayout+Refresh on Shown
-        // fixed it - only pushing real content below that band did. Root cause not identified;
-        // this spacer is an empirically verified, if inelegant, workaround.
-        table.RowCount = 1;
-        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
-        table.Controls.Add(new Panel { Height = 80, BackColor = _palette.Background }, 0, 0);
+        table.RowCount = 0;
         return table;
     }
 
@@ -397,6 +340,10 @@ public sealed class SettingsForm : Form
     {
         var rowIndex = table.RowCount++;
         table.RowStyles.Add(percentHeight is { } pct ? new RowStyle(SizeType.Percent, pct) : new RowStyle(SizeType.AutoSize));
+        if (control is FlowLayoutPanel)
+        {
+            control.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        }
         table.Controls.Add(control, 0, rowIndex);
     }
 
@@ -477,7 +424,7 @@ public sealed class SettingsForm : Form
         Text = text,
         AutoSize = true,
         AutoSizeMode = AutoSizeMode.GrowAndShrink,
-        MinimumSize = new Size(88, 27),
+        MinimumSize = new Size(112, 38),
         Padding = new Padding(10, 4, 10, 4),
     };
 

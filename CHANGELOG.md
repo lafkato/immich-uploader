@@ -1,3 +1,25 @@
+# v1.3.0
+
+## Suomi
+
+- Uusi työpöytäikkuna: sivunavigointi, rinnakkaiset siirtokortit ja kuvallinen tapahtumalista.
+- Uudistetut tummat ja vaaleat värit, selkeämpi typografia ja enemmän tilaa sisällölle.
+- Rajaa tapahtumat lähetyksiin, vastaanottoihin tai poistoihin; näe tiedostokoko ja ajankohta.
+- Tarkista siirrot ja keskeytä tai jatka lähetyksiä suoraan yleiskatsauksesta.
+- Asetuksissa on uusi sivunavigointi, ohjetekstit ja aina näkyvät tallennuspainikkeet.
+- Ikkuna on siirrettävä ja kokoa voi muuttaa. Se pysyy auki muiden sovellusten käytön aikana.
+- Sulkeminen jättää siirrot toimimaan ilmoitusalueella; kuvakkeesta voi palauttaa pienennetyn ikkunan.
+
+## English
+
+- Replace the tray popup with a resizable desktop dashboard, sidebar navigation and separate upload/download cards.
+- Refresh light and dark themes, typography, activity thumbnails and transfer metadata.
+- Filter the mixed activity timeline by uploads, downloads or deletions, with scan and pause/resume actions.
+- Redesign Settings with sidebar navigation, page descriptions and persistent save/cancel controls.
+- Keep the dashboard open when switching apps; closing the window leaves background synchronization running.
+
+Validation: Release build and smoke/regression tests; navigation filtering, pause/resume and live status verified. Rendered dashboard checked in light/dark themes and compact size, and all five settings pages checked.
+
 # v1.2.6
 
 ## Suomi

@@ -19,31 +19,31 @@ public readonly struct Palette
 
     public static Palette Dark => new()
     {
-        Background = Color.FromArgb(32, 32, 32),
-        Border = Color.FromArgb(64, 64, 64),
-        Text = Color.FromArgb(245, 245, 245),
-        TextMuted = Color.FromArgb(155, 155, 155),
-        Divider = Color.FromArgb(55, 55, 55),
-        Accent = Color.FromArgb(0, 191, 179),
-        Track = Color.FromArgb(55, 55, 55),
-        ThumbPlaceholder = Color.FromArgb(48, 48, 48),
-        ControlBackground = Color.FromArgb(45, 45, 45),
-        ControlBorder = Color.FromArgb(80, 80, 80),
+        Background = Color.FromArgb(13, 19, 31),
+        Border = Color.FromArgb(43, 55, 76),
+        Text = Color.FromArgb(234, 240, 250),
+        TextMuted = Color.FromArgb(148, 164, 189),
+        Divider = Color.FromArgb(35, 47, 66),
+        Accent = Color.FromArgb(139, 167, 255),
+        Track = Color.FromArgb(35, 47, 66),
+        ThumbPlaceholder = Color.FromArgb(31, 43, 63),
+        ControlBackground = Color.FromArgb(22, 32, 49),
+        ControlBorder = Color.FromArgb(53, 69, 94),
         IsDark = true,
     };
 
     public static Palette Light => new()
     {
-        Background = Color.FromArgb(250, 250, 250),
-        Border = Color.FromArgb(222, 222, 222),
-        Text = Color.FromArgb(28, 28, 28),
-        TextMuted = Color.FromArgb(110, 110, 110),
-        Divider = Color.FromArgb(228, 228, 228),
-        Accent = Color.FromArgb(0, 150, 140),
-        Track = Color.FromArgb(228, 228, 228),
-        ThumbPlaceholder = Color.FromArgb(238, 238, 238),
+        Background = Color.FromArgb(244, 247, 252),
+        Border = Color.FromArgb(217, 225, 239),
+        Text = Color.FromArgb(30, 43, 65),
+        TextMuted = Color.FromArgb(100, 116, 141),
+        Divider = Color.FromArgb(225, 232, 244),
+        Accent = Color.FromArgb(62, 94, 210),
+        Track = Color.FromArgb(225, 232, 244),
+        ThumbPlaceholder = Color.FromArgb(235, 240, 249),
         ControlBackground = Color.White,
-        ControlBorder = Color.FromArgb(200, 200, 200),
+        ControlBorder = Color.FromArgb(194, 207, 227),
         IsDark = false,
     };
 }

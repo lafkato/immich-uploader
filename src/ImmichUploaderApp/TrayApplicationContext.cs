@@ -204,7 +204,8 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         if (_activityPanel is { IsDisposed: false })
         {
-            _activityPanel.Close();
+            if (_activityPanel.WindowState == FormWindowState.Minimized) _activityPanel.WindowState = FormWindowState.Normal;
+            _activityPanel.Activate();
             return;
         }
 

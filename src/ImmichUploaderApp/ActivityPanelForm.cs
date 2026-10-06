@@ -25,7 +25,11 @@ public sealed class ActivityPanelForm : Form
     private IReadOnlyList<RecentDownload> _lastDownloads = Array.Empty<RecentDownload>();
     private IReadOnlyList<RecentDeletion> _lastDeletions = Array.Empty<RecentDeletion>();
 
-    private const int CornerRadius = 10;
+    private Label _activityTitle = null!, _uploadBadge = null!, _downloadBadge = null!;
+    private Button _pauseButton = null!;
+    private readonly List<Button> _navigation = new();
+    private int _activityFilter;
+    private bool _rendering;
 
     public ActivityPanelForm(UploadWatcherService watcher, PhotoSyncService photoSync, AppConfig config, Action openSettings)
     {
@@ -36,17 +40,21 @@ public sealed class ActivityPanelForm : Form
         _palette = ThemeService.Resolve(config.Theme);
 
         AutoScaleMode = AutoScaleMode.Font;
-        FormBorderStyle = FormBorderStyle.None;
-        ShowInTaskbar = false;
-        StartPosition = FormStartPosition.Manual;
-        TopMost = true;
-        ClientSize = new Size(500, 680);
+        Font = new Font("Segoe UI", 9.5f);
+        Text = Loc.T("app.name");
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+        FormBorderStyle = FormBorderStyle.Sizable;
+        ShowInTaskbar = true;
+        StartPosition = FormStartPosition.CenterScreen;
+        TopMost = false;
+        MinimumSize = new Size(840, 620);
+        var workArea = Screen.FromControl(this).WorkingArea;
+        ClientSize = new Size(Math.Min(1080, workArea.Width - 60), Math.Min(760, workArea.Height - 80));
         KeyPreview = true;
         BackColor = _palette.Background;
 
         BuildLayout();
-        ApplyRoundedRegion();
-        PositionNearTray();
+        HandleCreated += (_, _) => ThemeService.ApplyTitleBarTheme(this, _palette.IsDark);
 
         _watcher.ActivityChanged += OnWatcherActivityChanged;
         _photoSync.ActivityChanged += OnPhotoSyncActivityChanged;
@@ -55,36 +63,10 @@ public sealed class ActivityPanelForm : Form
         {
             _watcher.ActivityChanged -= OnWatcherActivityChanged;
             _photoSync.ActivityChanged -= OnPhotoSyncActivityChanged;
+            _rendering = true;
+            ClearActivityRows();
         };
         KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) Close(); };
-    }
-
-    // Gives the borderless popup a soft native drop shadow, the same trick used by tooltips
-    // and most tray flyouts, instead of it looking like a flat rectangle pasted on the desktop.
-    protected override CreateParams CreateParams
-    {
-        get
-        {
-            const int csDropShadow = 0x00020000;
-            var cp = base.CreateParams;
-            cp.ClassStyle |= csDropShadow;
-            return cp;
-        }
-    }
-
-    private void ApplyRoundedRegion()
-    {
-        using var path = RoundedRect(new Rectangle(0, 0, Width, Height), CornerRadius);
-        Region = new Region(path);
-    }
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        base.OnPaint(e);
-        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        using var path = RoundedRect(new Rectangle(0, 0, Width - 1, Height - 1), CornerRadius);
-        using var pen = new Pen(_palette.Border);
-        e.Graphics.DrawPath(pen, path);
     }
 
     private static GraphicsPath RoundedRect(Rectangle bounds, int radius)
@@ -99,193 +81,157 @@ public sealed class ActivityPanelForm : Form
         return path;
     }
 
+    private Button MakeButton(string text, Action action, bool primary = false)
+    {
+        var button = new Button
+        {
+            Text = text, AutoSize = true, MinimumSize = new Size(108, 38), Padding = new Padding(12, 5, 12, 5),
+            FlatStyle = FlatStyle.Flat, BackColor = primary ? _palette.Accent : _palette.ControlBackground,
+            ForeColor = primary ? (_palette.IsDark ? _palette.Background : Color.White) : _palette.Text,
+            Cursor = Cursors.Hand, Margin = new Padding(0, 0, 8, 0), AccessibleName = text,
+        };
+        button.FlatAppearance.BorderSize = primary ? 0 : 1;
+        button.FlatAppearance.BorderColor = _palette.ControlBorder;
+        button.Click += (_, _) => action();
+        return button;
+    }
+
+    private Label MakeText(string text, float size = 9.5f, bool bold = false, bool muted = false) => new()
+    {
+        Text = text, AutoSize = true, Dock = DockStyle.Fill,
+        Font = new Font("Segoe UI", size, bold ? FontStyle.Bold : FontStyle.Regular),
+        ForeColor = muted ? _palette.TextMuted : _palette.Text, Margin = new Padding(0, 0, 0, 8),
+    };
+
     private void BuildLayout()
     {
-        var outer = new Panel
-        {
-            Dock = DockStyle.Fill,
-            BackColor = _palette.Background,
-            Padding = new Padding(14),
-        };
-        Controls.Add(outer);
+        var shell = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0), BackColor = _palette.Background };
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 218));
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        Controls.Add(shell);
 
-        // TableLayoutPanel with one Percent(100) row for the recent-uploads list and AutoSize
-        // rows for everything else: a fixed header/footer around one flexible middle region is
-        // exactly what it's designed for, and unlike chained Dock=Top/Bottom/Fill siblings it
-        // doesn't depend on Controls.Add ordering to compute the flexible row's size correctly.
-        var table = new TableLayoutPanel
+        var sidebar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(20, 28, 16, 20), Margin = new Padding(0), BackColor = _palette.ControlBackground };
+        sidebar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        sidebar.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
+        sidebar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        sidebar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        sidebar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        sidebar.RowStyles.Add(new RowStyle(SizeType.Absolute, 132));
+        shell.Controls.Add(sidebar, 0, 0);
+        var brand = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
+        brand.Controls.Add(MakeText("immich", 25, true), 0, 0);
+        brand.Controls.Add(MakeText("UPLOADER  /  " + UpdateService.CurrentVersion.ToString(3), 8.5f, muted: true), 0, 1);
+        sidebar.Controls.Add(brand, 0, 0);
+
+        var nav = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0) };
+        var titles = new[] { Loc.T("design.overview"), Loc.T("design.uploads"), Loc.T("design.downloads"), Loc.T("design.deletions") };
+        for (var i = 0; i < titles.Length; i++)
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 13,
-            BackColor = _palette.Background,
-        };
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 13; i++)
-        {
-            table.RowStyles.Add(new RowStyle(i == 8 ? SizeType.Percent : SizeType.AutoSize, i == 8 ? 100 : 0));
+            var index = i;
+            var button = MakeButton(titles[i], () => SelectActivity(index));
+            button.AutoSize = false; button.Size = new Size(180, 44); button.TextAlign = ContentAlignment.MiddleLeft;
+            button.FlatAppearance.BorderSize = 0; button.Margin = new Padding(0, 0, 0, 6);
+            _navigation.Add(button); nav.Controls.Add(button);
         }
-        outer.Controls.Add(table);
+        sidebar.Controls.Add(nav, 0, 1);
+        var links = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0, 0, 0, 22) };
+        links.Controls.Add(MakeButton(Loc.T("tray.openServer"), () => OnOpenServerClicked(this, EventArgs.Empty)));
+        links.Controls.Add(MakeButton(Loc.T("panel.settingsButton"), () => _openSettings()));
+        sidebar.Controls.Add(links, 0, 3);
+        var storage = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = new Padding(0) };
+        storage.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        storage.RowStyles.Add(new RowStyle(SizeType.Absolute, 14));
+        storage.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        storage.Controls.Add(MakeText(Loc.T("panel.storageHeader"), 8.5f, true, true), 0, 0);
+        _storageProgressBar = new FlatProgressBar { Dock = DockStyle.Top, Height = 6, TrackColor = _palette.Track, FillColor = _palette.Accent, Margin = new Padding(0) };
+        _storageLabel = MakeText(Loc.T("panel.loading"), 9, muted: true);
+        _storageLabel.AutoSize = false;
+        storage.Controls.Add(_storageProgressBar, 0, 1); storage.Controls.Add(_storageLabel, 0, 2);
+        sidebar.Controls.Add(storage, 0, 4);
 
-        var header = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            WrapContents = true,
-            BackColor = _palette.Background,
-        };
-        var titleLabel = new Label
-        {
-            Text = Loc.T("app.name"),
-            Font = new Font(Font.FontFamily, 11f, FontStyle.Bold),
-            ForeColor = _palette.Text,
-            AutoSize = true,
-            Margin = new Padding(0, 4, 0, 10),
-        };
-        var openServerButton = new Button
-        {
-            Text = Loc.T("tray.openServer"),
-            FlatStyle = FlatStyle.Flat,
-            ForeColor = _palette.Accent,
-            BackColor = _palette.Background,
-            Cursor = Cursors.Hand,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Margin = new Padding(10, 0, 0, 10),
-            Padding = new Padding(2, 0, 2, 0),
-        };
-        openServerButton.FlatAppearance.BorderSize = 0;
-        openServerButton.FlatAppearance.MouseOverBackColor = _palette.Divider;
-        openServerButton.FlatAppearance.MouseDownBackColor = _palette.Divider;
-        openServerButton.Click += OnOpenServerClicked;
-
-        var settingsButton = new Button
-        {
-            Text = Loc.T("panel.settingsButton"),
-            FlatStyle = FlatStyle.Flat,
-            ForeColor = _palette.Accent,
-            BackColor = _palette.Background,
-            Cursor = Cursors.Hand,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Margin = new Padding(6, 0, 0, 10),
-            Padding = new Padding(2, 0, 2, 0),
-        };
-        settingsButton.FlatAppearance.BorderSize = 0;
-        settingsButton.FlatAppearance.MouseOverBackColor = _palette.Divider;
-        settingsButton.FlatAppearance.MouseDownBackColor = _palette.Divider;
-        settingsButton.Click += (_, _) => { Close(); _openSettings(); };
-        header.Controls.Add(titleLabel);
-        header.Controls.Add(openServerButton);
-        header.Controls.Add(settingsButton);
-        var scanButton = new Button { Text = Loc.T("activity.check"), AutoSize = true, FlatStyle = FlatStyle.Flat, ForeColor = _palette.Accent, BackColor = _palette.Background };
-        scanButton.Click += (_, _) => { _watcher.ScanNow(); _photoSync.ScanNow(); };
-        header.Controls.Add(scanButton);
-        _uploadSummaryLabel = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = _palette.TextMuted, Margin = new Padding(0, 0, 0, 12) };
-        _downloadStatusLabel = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = _palette.Text, Margin = new Padding(0, 0, 0, 6) };
-        _downloadSummaryLabel = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = _palette.TextMuted, Margin = new Padding(0, 0, 0, 12) };
-        _downloadProgressBar = new FlatProgressBar { Dock = DockStyle.Fill, Height = 6, TrackColor = _palette.Track, FillColor = _palette.Accent, Visible = false };
-
-        _statusLabel = new Label
-        {
-            Text = Loc.T("panel.loading"),
-            ForeColor = _palette.Text,
-            AutoSize = true,
-            Dock = DockStyle.Fill,
-            Margin = new Padding(0, 0, 0, 6),
-        };
-
-        _uploadProgressBar = new FlatProgressBar
-        {
-            Dock = DockStyle.Fill,
-            Height = 4,
-            TrackColor = _palette.Track,
-            FillColor = _palette.Accent,
-            Visible = false,
-            Margin = new Padding(0, 0, 0, 10),
-        };
-
-        _failureLabel = new Label
-        {
-            ForeColor = Color.Firebrick,
-            AutoEllipsis = true,
-            AutoSize = false,
-            Height = 34,
-            Dock = DockStyle.Fill,
-            Visible = false,
-            Margin = new Padding(0, 0, 0, 6),
-        };
-
-        // Plain FlowLayoutPanel isn't double-buffered, which tears/flickers noticeably while
-        // scrolling once there's enough content to need scrolling at all - now routinely the
-        // case with two sections (uploads + downloads) instead of one. Same fix as
-        // FlatProgressBar below: enable double buffering via the protected ControlStyles.
-        _recentList = new DoubleBufferedFlowLayoutPanel(_palette.IsDark)
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            AutoScroll = true,
-            BackColor = _palette.Background,
-        };
-
-        var separator1 = new Panel { Dock = DockStyle.Fill, Height = 1, BackColor = _palette.Divider, Margin = new Padding(0, 10, 0, 10) };
-
-        var storageHeader = new Label
-        {
-            Text = Loc.T("panel.storageHeader"),
-            Font = new Font(Font.FontFamily, 8f, FontStyle.Bold),
-            ForeColor = _palette.TextMuted,
-            AutoSize = true,
-            Dock = DockStyle.Fill,
-            Margin = new Padding(0, 0, 0, 6),
-        };
-        _storageProgressBar = new FlatProgressBar
-        {
-            Dock = DockStyle.Fill,
-            Height = 4,
-            TrackColor = _palette.Track,
-            FillColor = _palette.Accent,
-            Margin = new Padding(0, 0, 0, 6),
-        };
-        _storageLabel = new Label
-        {
-            Text = Loc.T("panel.loading"),
-            ForeColor = _palette.TextMuted,
-            AutoSize = true,
-            Dock = DockStyle.Fill,
-            Margin = new Padding(0, 0, 0, 0),
-        };
-
-        table.Controls.Add(header, 0, 0);
-        table.Controls.Add(_statusLabel, 0, 1);
-        table.Controls.Add(_uploadProgressBar, 0, 2);
-        table.Controls.Add(_uploadSummaryLabel, 0, 3);
-        table.Controls.Add(_downloadStatusLabel, 0, 4);
-        table.Controls.Add(_downloadProgressBar, 0, 5);
-        table.Controls.Add(_downloadSummaryLabel, 0, 6);
-        table.Controls.Add(_failureLabel, 0, 7);
-        table.Controls.Add(_recentList, 0, 8);
-        table.Controls.Add(separator1, 0, 9);
-        table.Controls.Add(storageHeader, 0, 10);
-        table.Controls.Add(_storageProgressBar, 0, 11);
-        table.Controls.Add(_storageLabel, 0, 12);
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(28, 28, 28, 20), Margin = new Padding(0) };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 222));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        shell.Controls.Add(content, 1, 0);
+        var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
+        heading.Controls.Add(MakeText(Loc.T("design.overview"), 23, true), 0, 0);
+        var server = Uri.TryCreate(_config.ServerUrl, UriKind.Absolute, out var uri) ? uri.Host : Loc.T("design.noServer");
+        heading.Controls.Add(MakeText(Loc.T("design.subtitle", server), 9.5f, muted: true), 0, 1);
+        content.Controls.Add(heading, 0, 0);
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = new Padding(0) };
+        actions.Controls.Add(MakeButton(Loc.T("activity.check"), () => { _watcher.ScanNow(); _photoSync.ScanNow(); }, true));
+        _pauseButton = MakeButton(Loc.T("tray.pause"), () => { if (_watcher.IsPaused) _watcher.Resume(); else _watcher.Pause(); });
+        actions.Controls.Add(_pauseButton);
+        content.Controls.Add(actions, 0, 1);
+        var transfers = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0, 0, 0, 16) };
+        transfers.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); transfers.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        transfers.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        transfers.Controls.Add(BuildTransferCard(true), 0, 0); transfers.Controls.Add(BuildTransferCard(false), 1, 0);
+        content.Controls.Add(transfers, 0, 2);
+        _failureLabel = new Label { Dock = DockStyle.Fill, AutoSize = true, MaximumSize = new Size(650, 0), ForeColor = _palette.IsDark ? Color.Salmon : Color.Firebrick, Visible = false, Margin = new Padding(0, 0, 0, 10) };
+        content.Controls.Add(_failureLabel, 0, 3);
+        var history = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
+        history.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        history.RowStyles.Add(new RowStyle(SizeType.Absolute, 38)); history.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _activityTitle = MakeText(Loc.T("design.activity"), 13, true);
+        history.Controls.Add(_activityTitle, 0, 0);
+        _recentList = new DoubleBufferedFlowLayoutPanel(_palette.IsDark) { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = _palette.Background, Margin = new Padding(0) };
+        _recentList.SizeChanged += (_, _) => { if (IsHandleCreated) RenderActivity(); };
+        history.Controls.Add(_recentList, 0, 1);
+        content.Controls.Add(history, 0, 4);
+        SelectActivity(0);
     }
 
-    private void PositionNearTray()
+    private Control BuildTransferCard(bool upload)
     {
-        var workArea = Screen.FromPoint(Cursor.Position).WorkingArea;
-        var x = workArea.Right - Width - 8;
-        var y = workArea.Bottom - Height - 8;
-        Location = new Point(Math.Max(workArea.Left, x), Math.Max(workArea.Top, y));
+        var surface = new SurfacePanel(_palette) { Dock = DockStyle.Fill, Padding = new Padding(18), Margin = upload ? new Padding(0, 0, 8, 0) : new Padding(8, 0, 0, 0) };
+        var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = _palette.ControlBackground, Margin = new Padding(0) };
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); table.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 18)); table.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        header.Controls.Add(MakeText(upload ? Loc.T("activity.upload") : Loc.T("activity.download"), 9.5f, true), 0, 0);
+        var badge = MakeText(Loc.T("design.waiting"), 8.5f, true, true); header.Controls.Add(badge, 1, 0);
+        var status = MakeText(Loc.T("activity.waiting"), 11, true); status.AutoSize = false; status.AutoEllipsis = true;
+        var bar = new FlatProgressBar { Dock = DockStyle.Top, Height = 7, TrackColor = _palette.Track, FillColor = upload ? _palette.Accent : (_palette.IsDark ? Color.FromArgb(85, 211, 181) : Color.FromArgb(20, 151, 122)), Margin = new Padding(0, 4, 0, 4) };
+        var summary = MakeText("", 8.5f, muted: true); summary.AutoSize = false; summary.AutoEllipsis = true;
+        table.Controls.Add(header, 0, 0); table.Controls.Add(status, 0, 1); table.Controls.Add(bar, 0, 2); table.Controls.Add(summary, 0, 3);
+        surface.Controls.Add(table);
+        if (upload) { _statusLabel = status; _uploadProgressBar = bar; _uploadSummaryLabel = summary; _uploadBadge = badge; }
+        else { _downloadStatusLabel = status; _downloadProgressBar = bar; _downloadSummaryLabel = summary; _downloadBadge = badge; }
+        return surface;
     }
 
-    protected override void OnDeactivate(EventArgs e)
+    private void SelectActivity(int filter)
     {
-        base.OnDeactivate(e);
-        Close();
+        _activityFilter = filter;
+        for (var i = 0; i < _navigation.Count; i++)
+        {
+            _navigation[i].BackColor = i == filter ? _palette.Track : _palette.ControlBackground;
+            _navigation[i].ForeColor = i == filter ? _palette.Accent : _palette.TextMuted;
+        }
+        _activityTitle.Text = Loc.T(filter switch { 1 => "design.uploads", 2 => "design.downloads", 3 => "design.deletions", _ => "design.activity" });
+        RenderActivity();
+    }
+
+    private sealed class SurfacePanel : Panel
+    {
+        private readonly Palette _colors;
+        public SurfacePanel(Palette colors) { _colors = colors; BackColor = colors.Background; DoubleBuffered = true; }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using var path = RoundedRect(new Rectangle(0, 0, Width - 1, Height - 1), 14);
+            using var brush = new SolidBrush(_colors.ControlBackground); e.Graphics.FillPath(brush, path);
+            using var pen = new Pen(_colors.Border); e.Graphics.DrawPath(pen, path);
+        }
     }
 
     private void OnOpenServerClicked(object? sender, EventArgs e)
@@ -319,7 +265,11 @@ public sealed class ActivityPanelForm : Form
                 : snapshot.ScanError is { } error ? Loc.T("activity.error", error)
                 : snapshot.QueueCount > 0 ? Loc.T("status.queued", snapshot.QueueCount)
                 : snapshot.LastScanAtLocal is null ? Loc.T("activity.waiting") : Loc.T("activity.idle");
-            _statusLabel.Text = Loc.T("activity.upload") + "\n" + state;
+            _statusLabel.Text = state;
+            _uploadBadge.Text = Loc.T(!_watcher.IsRunning ? "status.stopped" : snapshot.CurrentFileName is not null ? "design.active" : _watcher.IsPaused ? "design.paused" : snapshot.ScanError is not null ? "design.attention" : snapshot.IsScanning ? "design.checking" : snapshot.LastScanAtLocal is not null ? "design.ready" : "design.waiting");
+            _uploadBadge.ForeColor = snapshot.ScanError is not null ? Color.Coral : _palette.Accent;
+            _pauseButton.Text = Loc.T(_watcher.IsPaused ? "tray.resume" : "tray.pause");
+            _pauseButton.Enabled = _watcher.IsRunning;
             _uploadSummaryLabel.Text = Loc.T("activity.queue", ScanSummary(snapshot.FilesChecked, snapshot.LastScanAtLocal), snapshot.QueueCount) + (snapshot.ScanError is { } scanError && snapshot.IsScanning ? "\n" + Loc.T("activity.error", scanError) : "");
             var failure = snapshot.RecentFailures.FirstOrDefault();
             _failureLabel.Visible = failure is not null;
@@ -350,7 +300,9 @@ public sealed class ActivityPanelForm : Form
                 : snapshot.IsScanning ? Loc.T("activity.scanning", snapshot.FilesChecked)
                 : snapshot.ScanError is { } error ? Loc.T("activity.error", error)
                 : snapshot.LastScanAtLocal is null ? Loc.T("activity.waiting") : Loc.T("activity.idle");
-            _downloadStatusLabel.Text = Loc.T("activity.download") + "\n" + state;
+            _downloadStatusLabel.Text = state;
+            _downloadBadge.Text = Loc.T(!_config.SyncEnabled ? "activity.disabled" : !_photoSync.IsRunning ? "status.stopped" : snapshot.CurrentFileName is not null ? "design.active" : snapshot.ScanError is not null ? "design.attention" : snapshot.IsScanning ? "design.checking" : snapshot.LastScanAtLocal is not null ? "design.ready" : "design.waiting");
+            _downloadBadge.ForeColor = snapshot.ScanError is not null ? Color.Coral : _palette.Accent;
             _downloadSummaryLabel.Text = ScanSummary(snapshot.FilesChecked, snapshot.LastScanAtLocal) + "\n" + Loc.T("activity.received", snapshot.FilesTransferred) + (snapshot.ScanError is { } scanError && snapshot.IsScanning ? "\n" + Loc.T("activity.error", scanError) : "");
             _downloadProgressBar.Visible = snapshot.ProgressPercent is not null;
             _downloadProgressBar.Value = snapshot.ProgressPercent is { } progress ? (int)Math.Round(progress) : 0;
@@ -379,60 +331,52 @@ public sealed class ActivityPanelForm : Form
         }
     }
 
-    private const int ThumbnailBoxSize = 42;
+    private const int ThumbnailBoxSize = 60;
+    private int Scale(int pixels) => (int)Math.Round(pixels * DeviceDpi / 96d);
 
-    /// Renders both directions into one scrollable region: uploads section, then downloads
-    /// section, each with its own header - simpler and more robust to varying content amounts
-    /// than splitting the flexible table row into two fixed halves.
+    private sealed record TimelineItem(string Name, DateTime At, long Size, byte[]? Thumbnail, string? Path, int Kind, string? Reason = null);
+
     private void RenderActivity()
     {
+        if (_rendering) return;
+        _rendering = true;
+        var scroll = _recentList.AutoScrollPosition;
         _recentList.SuspendLayout();
-        ClearActivityRows();
-        // Reserve the vertical scrollbar's width up front, even while it isn't visible yet: rows
-        // get an explicit Width below (not Dock=Fill), so if it were sized to the current,
-        // scrollbar-less ClientSize.Width and adding these rows is what makes the list tall enough
-        // to need scrolling, the now-narrower post-scrollbar ClientSize.Width leaves every row
-        // slightly too wide - which is exactly what was showing up as a spurious horizontal
-        // scrollbar alongside the vertical one.
-        var rowWidth = Math.Max(200, _recentList.ClientSize.Width - 4 - SystemInformation.VerticalScrollBarWidth);
-
-        AddSectionHeader(Loc.T("panel.recentHeader"));
-        if (_lastUploads.Count == 0)
+        try
         {
-            AddEmptyLabel(Loc.T("panel.noUploads"));
-        }
-        else
-        {
-            AddActivityRows(_lastUploads.Select(u => (u.FileName, u.UploadedAtLocal, u.SizeBytes, u.ThumbnailPng, u.FullPath)), rowWidth);
-        }
-
-        AddSectionHeader(Loc.T("panel.downloadsHeader"), topMargin: 14);
-        if (_lastDownloads.Count == 0)
-        {
-            AddEmptyLabel(Loc.T("panel.noDownloads"));
-        }
-        else
-        {
-            AddActivityRows(_lastDownloads.Select(d => (d.FileName, d.DownloadedAtLocal, d.SizeBytes, d.ThumbnailPng, d.FullPath)), rowWidth);
-        }
-
-        AddSectionHeader(Loc.T("panel.deletionsHeader"), topMargin: 14);
-        if (_lastDeletions.Count == 0)
-        {
-            AddEmptyLabel(Loc.T("panel.noDeletions"));
-        }
-        else
-        {
-            var isFirst = true;
-            foreach (var deletion in _lastDeletions)
+            ClearActivityRows();
+            var rowWidth = Math.Max(200, _recentList.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 4);
+            var items = _lastUploads.Select(u => new TimelineItem(u.FileName, u.UploadedAtLocal, u.SizeBytes, u.ThumbnailPng, u.FullPath, 1))
+                .Concat(_lastDownloads.Select(d => new TimelineItem(d.FileName, d.DownloadedAtLocal, d.SizeBytes, d.ThumbnailPng, d.FullPath, 2)))
+                .Concat(_lastDeletions.Select(d => new TimelineItem(d.FileName, d.DeletedAtLocal, 0, null, null, 3, d.Reason)))
+                .Where(item => _activityFilter == 0 || item.Kind == _activityFilter).OrderByDescending(item => item.At).ToArray();
+            if (items.Length == 0)
             {
-                if (!isFirst) _recentList.Controls.Add(new Panel { Width = rowWidth, Height = 1, BackColor = _palette.Divider, Margin = new Padding(0, 2, 0, 2) });
-                isFirst = false;
-                _recentList.Controls.Add(BuildDeletionRow(deletion.FileName, deletion.Reason, deletion.DeletedAtLocal, rowWidth));
+                var empty = new SurfacePanel(_palette) { Width = rowWidth, Height = Scale(170), Margin = new Padding(0, 4, 0, 0), Padding = new Padding(24) };
+                var title = new Label { Text = Loc.T("design.emptyTitle"), Dock = DockStyle.Top, Height = 36, ForeColor = _palette.Text, BackColor = _palette.ControlBackground, Font = new Font("Segoe UI", 13, FontStyle.Bold) };
+                var hint = new Label { Text = Loc.T("design.emptyHint"), Dock = DockStyle.Fill, ForeColor = _palette.TextMuted, BackColor = _palette.ControlBackground, Padding = new Padding(0, 16, 0, 0) };
+                empty.Controls.Add(hint); empty.Controls.Add(title); _recentList.Controls.Add(empty);
             }
+            foreach (var item in items)
+            {
+                var row = item.Kind == 3 ? BuildDeletionRow(item.Name, item.Reason!, item.At, rowWidth) : BuildActivityRow(item.Name, item.At, item.Thumbnail, item.Path, rowWidth);
+                row.AccessibleName = item.Name;
+                row.AccessibleDescription = item.Path ?? item.Reason;
+                if (item.Kind != 3)
+                {
+                    var metadata = row.Controls.OfType<Label>().Last();
+                    metadata.Text = Loc.T(item.Kind == 1 ? "design.sent" : "design.received") + "   ·   " + FormatBytes(item.Size) + "   ·   " + FormatRelativeTime(item.At);
+                }
+                _recentList.Controls.Add(row);
+            }
+            _activityTitle.Text = Loc.T(_activityFilter switch { 1 => "design.uploads", 2 => "design.downloads", 3 => "design.deletions", _ => "design.activity" }) + $"  ·  {items.Length}";
         }
-
-        _recentList.ResumeLayout();
+        finally
+        {
+            _recentList.ResumeLayout();
+            _recentList.AutoScrollPosition = new Point(-scroll.X, -scroll.Y);
+            _rendering = false;
+        }
     }
 
     /// PictureBox doesn't dispose an Image assigned via its Image property when the control
@@ -456,80 +400,54 @@ public sealed class ActivityPanelForm : Form
         _recentList.Controls.Clear();
     }
 
-    private void AddSectionHeader(string text, int topMargin = 0)
-    {
-        _recentList.Controls.Add(new Label
-        {
-            Text = text,
-            Font = new Font(Font.FontFamily, 8f, FontStyle.Bold),
-            ForeColor = _palette.TextMuted,
-            AutoSize = true,
-            Margin = new Padding(0, topMargin, 0, 6),
-        });
-    }
-
-    private void AddEmptyLabel(string text)
-    {
-        _recentList.Controls.Add(new Label
-        {
-            Text = text,
-            AutoSize = true,
-            ForeColor = _palette.TextMuted,
-            Margin = new Padding(2, 0, 2, 4),
-        });
-    }
-
-    private void AddActivityRows(IEnumerable<(string FileName, DateTime AtLocal, long SizeBytes, byte[]? ThumbnailPng, string? FullPath)> items, int rowWidth)
-    {
-        var isFirst = true;
-        foreach (var item in items)
-        {
-            if (!isFirst) _recentList.Controls.Add(new Panel { Width = rowWidth, Height = 1, BackColor = _palette.Divider, Margin = new Padding(0, 2, 0, 2) });
-            isFirst = false;
-            _recentList.Controls.Add(BuildActivityRow(item.FileName, item.AtLocal, item.ThumbnailPng, item.FullPath, rowWidth));
-        }
-    }
-
     private Control BuildActivityRow(string fileName, DateTime atLocal, byte[]? thumbnailPng, string? fullPath, int rowWidth)
     {
-        var row = new Panel
+        var row = new SurfacePanel(_palette)
         {
             Width = rowWidth,
-            Height = ThumbnailBoxSize + 8,
-            Margin = new Padding(0, 4, 0, 4),
+            Height = Scale(ThumbnailBoxSize + 24),
+            Margin = new Padding(0, 0, 0, 10),
             BackColor = _palette.Background,
         };
 
         var thumbBox = new PictureBox
         {
-            Location = new Point(0, 4),
-            Size = new Size(ThumbnailBoxSize, ThumbnailBoxSize),
+            Location = new Point(Scale(12), Scale(12)),
+            Size = new Size(Scale(ThumbnailBoxSize), Scale(ThumbnailBoxSize)),
             SizeMode = PictureBoxSizeMode.Zoom,
             BackColor = _palette.ThumbPlaceholder,
         };
         if (thumbnailPng is { Length: > 0 } png)
         {
-            using var ms = new MemoryStream(png);
-            thumbBox.Image = Image.FromStream(ms);
+            try
+            {
+                using var ms = new MemoryStream(png);
+                using var source = Image.FromStream(ms);
+                thumbBox.Image = new Bitmap(source);
+            }
+            catch (ArgumentException) { /* Keep the placeholder when a saved preview cannot be decoded. */ }
         }
 
-        var textLeft = ThumbnailBoxSize + 10;
-        var textWidth = Math.Max(60, rowWidth - textLeft);
+        var textLeft = Scale(ThumbnailBoxSize + 28);
+        var textWidth = Math.Max(60, rowWidth - textLeft - Scale(16));
         var nameLabel = new Label
         {
             Text = fileName,
-            Location = new Point(textLeft, 6),
-            Size = new Size(textWidth, 18),
+            Location = new Point(textLeft, Scale(17)),
+            Size = new Size(textWidth, Scale(24)),
             ForeColor = _palette.Text,
+            BackColor = _palette.ControlBackground,
+            Font = new Font("Segoe UI", 10f, FontStyle.Bold),
             AutoEllipsis = true,
         };
         var timeLabel = new Label
         {
             Text = FormatRelativeTime(atLocal),
-            Location = new Point(textLeft, 25),
-            Size = new Size(textWidth, 16),
+            Location = new Point(textLeft, Scale(45)),
+            Size = new Size(textWidth, Scale(22)),
             ForeColor = _palette.TextMuted,
-            Font = new Font(Font.FontFamily, 8f),
+            BackColor = _palette.ControlBackground,
+            Font = new Font("Segoe UI", 9f),
         };
 
         row.Controls.Add(thumbBox);
@@ -545,10 +463,10 @@ public sealed class ActivityPanelForm : Form
             control.Click += (_, _) => _ = OpenActivityFileAsync(fileName, fullPath);
             // Hover highlight so it is obvious the row can be clicked. Child controls fire their own
             // enter/leave, so only un-highlight once the pointer has really left the whole row.
-            control.MouseEnter += (_, _) => row.BackColor = _palette.ControlBackground;
+            control.MouseEnter += (_, _) => nameLabel.ForeColor = _palette.Accent;
             control.MouseLeave += (_, _) =>
             {
-                if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position))) row.BackColor = _palette.Background;
+                if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position))) nameLabel.ForeColor = _palette.Text;
             };
         }
         return row;
@@ -609,32 +527,35 @@ public sealed class ActivityPanelForm : Form
 
     /// No thumbnail (the file is gone by the time this renders, whichever side deleted it first)
     /// - just the filename, why it was deleted, and when, in the same two-line row shape as the
-    /// upload/download rows so the three sections read as one consistent list.
+    /// upload/download rows in the combined timeline.
     private Control BuildDeletionRow(string fileName, string reason, DateTime atLocal, int rowWidth)
     {
-        var row = new Panel
+        var row = new SurfacePanel(_palette)
         {
             Width = rowWidth,
-            Height = 40,
-            Margin = new Padding(0, 4, 0, 4),
+            Height = Scale(66),
+            Margin = new Padding(0, 0, 0, 10),
             BackColor = _palette.Background,
         };
 
         var nameLabel = new Label
         {
             Text = fileName,
-            Location = new Point(0, 2),
-            Size = new Size(rowWidth, 18),
+            Location = new Point(Scale(16), Scale(10)),
+            Size = new Size(rowWidth - Scale(32), Scale(20)),
             ForeColor = _palette.Text,
+            BackColor = _palette.ControlBackground,
+            Font = new Font("Segoe UI", 10f, FontStyle.Bold),
             AutoEllipsis = true,
         };
         var reasonLabel = new Label
         {
             Text = $"{reason} · {FormatRelativeTime(atLocal)}",
-            Location = new Point(0, 21),
-            Size = new Size(rowWidth, 16),
+            Location = new Point(Scale(16), Scale(35)),
+            Size = new Size(rowWidth - Scale(32), Scale(20)),
             ForeColor = _palette.TextMuted,
-            Font = new Font(Font.FontFamily, 8f),
+            BackColor = _palette.ControlBackground,
+            Font = new Font("Segoe UI", 9f),
             AutoEllipsis = true,
         };
 

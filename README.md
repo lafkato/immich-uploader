@@ -18,7 +18,7 @@
 
 ### Lataa ja aloita
 
-1. [Lataa uusin julkaisu](https://github.com/lafkato/immich-uploader/releases/latest) ja käynnistä `ImmichUploader.exe`.
+1. [Lataa uusin julkaisu](https://github.com/lafkato/immich-uploader/releases/latest) ja asenna `ImmichUploaderSetup-*.exe`.
 2. Anna asetuksissa Immich-palvelimen API-osoite ja API-avain.
 3. Valitse tarkkailtavat kansiot. Sovellus jatkaa toimintaansa huomaamattomasti ilmoitusalueella.
 
@@ -27,6 +27,14 @@
 
 > [!NOTE]
 > Julkaisu rakennetaan self-contained-kansioksi pakatun yhden `.exe`-tiedoston sijaan. Tämä pitää runtime-tiedostot läpinäkyvinä ja vähentää virustorjunnan heuristiikkaosumia.
+
+### Uusi työpöytänäkymä
+
+Avaa yleiskatsaus napsauttamalla ilmoitusalueen Immich-kuvaketta. Ikkunassa näkyvät rinnakkain lähetys ja vastaanotto, niiden eteneminen sekä tarkistusten tilanne. Vasemmalta voit rajata tapahtumat lähetyksiin, vastaanottoihin tai poistoihin. Kuvan rivi avaa paikallisen tiedoston.
+
+Ikkunan kokoa voi muuttaa. Sen sulkeminen jättää synkronoinnin toimimaan taustalla. Asetuksissa on oma sivunavigointi palvelimelle, kansioille, vastaanotoille ja päivityksille.
+
+![Uusi tumma työpöytänäkymä, esimerkkitapahtumat](assets/dashboard-dark.png)
 
 ### Ominaisuudet
 
@@ -40,7 +48,7 @@
 
 ### Kuvien ja videoiden lataus Immichistä
 
-Lataussuunta toimii myös toisin päin: Immich Uploader voi peilata koko Immich-kirjastosi paikalliseen kansioon, samaan tapaan kuin Google Drive, OneDrive tai iCloud synkronoivat pilvitiedostoja koneellesi. Ota käyttöön asetusten Lataukset-välilehdeltä:
+Lataussuunta toimii myös toisin päin: Immich Uploader voi peilata koko Immich-kirjastosi paikalliseen kansioon, samaan tapaan kuin Google Drive, OneDrive tai iCloud synkronoivat pilvitiedostoja koneellesi. Ota käyttöön asetusten Lataukset-sivulta:
 
 - Erilliset kohdekansiot kuville ja videoille
 - Kevyt tila lataa pienet esikatselukuvat; täysi koko lataa alkuperäiset tiedostot. Videot ladataan aina alkuperäisenä, koska Immichillä ei ole kevyttä videoesikatselua
@@ -76,7 +84,7 @@ Sovellus tallentaa asetukset ja lataushistorian Windows-käyttäjäprofiiliisi. 
 
 ### Download and get started
 
-1. [Download the latest release](https://github.com/lafkato/immich-uploader/releases/latest) and run `ImmichUploader.exe`.
+1. [Download the latest release](https://github.com/lafkato/immich-uploader/releases/latest) and install `ImmichUploaderSetup-*.exe`.
 2. Enter your Immich API URL and API key in Settings.
 3. Choose the folders to watch. The app then runs quietly in the system tray.
 
@@ -85,6 +93,12 @@ Sovellus tallentaa asetukset ja lataushistorian Windows-käyttäjäprofiiliisi. 
 
 > [!NOTE]
 > Releases are built as a self-contained folder instead of a packed single `.exe`. This keeps runtime files transparent and reduces false-positive antivirus heuristics.
+
+### New desktop dashboard
+
+Click the Immich tray icon to open the dashboard. Uploads and downloads appear side by side with live progress and scan status. The sidebar filters uploads, downloads and deletions. Click a photo row to open the local file.
+
+Resize the window as needed. Closing it leaves synchronization running in the background. Settings has separate navigation for your server, folders, downloads and updates.
 
 ### Highlights
 
@@ -98,7 +112,7 @@ Sovellus tallentaa asetukset ja lataushistorian Windows-käyttäjäprofiiliisi. 
 
 ### Downloading photos and videos from Immich
 
-The upload direction also works in reverse: Immich Uploader can mirror your whole Immich library to a local folder, the same way Google Drive, OneDrive, or iCloud sync cloud files to your computer. Enable it from the Downloads tab in Settings:
+The upload direction also works in reverse: Immich Uploader can mirror your whole Immich library to a local folder, the same way Google Drive, OneDrive, or iCloud sync cloud files to your computer. Enable it from the Downloads page in Settings:
 
 - Separate destination folders for photos and videos
 - Lightweight mode downloads small preview images; full size downloads the original files. Videos always download at full size, since Immich has no lightweight video preview
