@@ -48,6 +48,11 @@ public sealed class PhotoSyncService : IDisposable
     private AppConfig _config = new();
     private int _scanRunning;
     private int _localCheckRunning;
+    private int _filesChecked, _filesTransferred;
+    private string? _currentFileName, _scanError;
+    private double? _progressPercent;
+    private long _bytesTransferred;
+    private DateTime? _lastScanAtLocal;
     private string _lastStatusText = Loc.T("status.stopped");
     private Dictionary<string, List<string>> _albumNamesByAssetId = new();
 
@@ -100,7 +105,7 @@ public sealed class PhotoSyncService : IDisposable
 
     public PhotoSyncActivitySnapshot GetCurrentSnapshot()
     {
-        lock (_activityLock) return new(_lastStatusText, _recentDownloads.ToList(), _recentDeletions.ToList());
+        lock (_activityLock) return new(_lastStatusText, _recentDownloads.ToList(), _recentDeletions.ToList(), _scanRunning != 0, _filesChecked, _filesTransferred, _currentFileName, _progressPercent, _bytesTransferred, _lastScanAtLocal, _scanError);
     }
 
     private void RaiseActivity(string statusText)
@@ -109,7 +114,7 @@ public sealed class PhotoSyncService : IDisposable
         lock (_activityLock)
         {
             _lastStatusText = statusText;
-            snapshot = new PhotoSyncActivitySnapshot(statusText, _recentDownloads.ToList(), _recentDeletions.ToList());
+            snapshot = new PhotoSyncActivitySnapshot(statusText, _recentDownloads.ToList(), _recentDeletions.ToList(), _scanRunning != 0, _filesChecked, _filesTransferred, _currentFileName, _progressPercent, _bytesTransferred, _lastScanAtLocal, _scanError);
         }
         ActivityChanged?.Invoke(snapshot);
     }
@@ -217,6 +222,7 @@ public sealed class PhotoSyncService : IDisposable
         if (!IsRunning || _client is null || Interlocked.CompareExchange(ref _scanRunning, 1, 0) != 0) return;
         try
         {
+            lock (_activityLock) { _filesChecked = 0; _filesTransferred = 0; _scanError = null; }
             RaiseActivity(Loc.T("sync.scanning"));
             _albumNamesByAssetId = _config.SyncOrganizeByAlbum ? await BuildAlbumMembershipAsync(ct) : new Dictionary<string, List<string>>();
 
@@ -242,9 +248,11 @@ public sealed class PhotoSyncService : IDisposable
                         continue;
                     }
                     remoteIds.Add(asset.Id);
+                    lock (_activityLock) _filesChecked++;
+                    if (_filesChecked % 100 == 0) RaiseActivity(Loc.T("sync.scanning"));
                     try
                     {
-                        if (await SyncAssetAsync(asset, ct)) downloaded++;
+                        if (await SyncAssetAsync(asset, ct)) { downloaded++; lock (_activityLock) _filesTransferred++; RaiseActivity(Loc.T("sync.scanning")); }
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
@@ -252,6 +260,7 @@ public sealed class PhotoSyncService : IDisposable
                         // One asset failing (e.g. its thumbnail not generated yet server-side)
                         // shouldn't abort the whole scan - same tolerance as the upload side's
                         // per-file handling in UploadWatcherService.
+                        lock (_activityLock) _scanError = ex.Message;
                         AppLogger.Log($"VAROITUS: kuvan '{asset.OriginalFileName}' synkronointi epaonnistui: {ex.Message}");
                     }
                 }
@@ -267,10 +276,11 @@ public sealed class PhotoSyncService : IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
+            lock (_activityLock) _scanError = ex.Message;
             AppLogger.Log($"VIRHE kuvasynkronoinnissa: {ex.Message}");
             RaiseActivity(Loc.T("sync.scanFailed", ex.Message));
         }
-        finally { Interlocked.Exchange(ref _scanRunning, 0); }
+        finally { Interlocked.Exchange(ref _scanRunning, 0); lock (_activityLock) { _currentFileName = null; _progressPercent = null; _lastScanAtLocal = DateTime.Now; } RaiseActivity(_lastStatusText); }
     }
 
     /// Builds an assetId -> album names lookup by fetching every album's full asset list. Only
@@ -311,7 +321,8 @@ public sealed class PhotoSyncService : IDisposable
     private async Task<bool> SyncAssetAsync(AssetSummary asset, CancellationToken ct)
     {
         var root = asset.Type == "VIDEO" ? _config.SyncVideoFolder : _config.SyncPhotoFolder;
-        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return false;
+        if (string.IsNullOrWhiteSpace(root)) return false;
+        if (!Directory.Exists(root)) { lock (_activityLock) _scanError = Loc.T("activity.folderMissing", root); return false; }
         var wantedPaths = BuildDestinationPaths(asset);
         if (wantedPaths.Count == 0) return false; // no folder configured for this asset's type
 
@@ -376,8 +387,23 @@ public sealed class PhotoSyncService : IDisposable
         // creating a duplicate on the server. Overlapping sync/watch folders are only actually
         // safe with this ordering.
         var tempPath = firstPath + ".immichsync-tmp";
-        if (effectiveMode == "Original") await _client!.DownloadOriginalAsync(asset.Id, tempPath, ct);
-        else await _client!.DownloadThumbnailAsync(asset.Id, tempPath, ct);
+        lock (_activityLock) { _currentFileName = Path.GetFileName(firstPath); _progressPercent = null; _bytesTransferred = 0; }
+        RaiseActivity(Loc.T("sync.scanning"));
+        var lastReport = Environment.TickCount64;
+        void Progress(long bytes, long total)
+        {
+            lock (_activityLock) { _bytesTransferred = bytes; _progressPercent = total > 0 ? bytes * 100d / total : null; }
+            if (Environment.TickCount64 - lastReport < 250 && bytes != total) return;
+            lastReport = Environment.TickCount64;
+            RaiseActivity(Loc.T("sync.scanning"));
+        }
+        try
+        {
+            if (effectiveMode == "Original") await _client!.DownloadOriginalAsync(asset.Id, tempPath, ct, Progress);
+            else await _client!.DownloadThumbnailAsync(asset.Id, tempPath, ct, Progress);
+        }
+        finally { lock (_activityLock) { _currentFileName = null; _progressPercent = null; } }
+
         await MarkAsKnownUploadAsync(tempPath, ct);
         File.Move(tempPath, firstPath, overwrite: true);
 

@@ -6,4 +6,4 @@ public sealed record WatcherActivitySnapshot(
     double? CurrentFileProgressPercent,
     int QueueCount,
     IReadOnlyList<RecentUpload> RecentUploads,
-    IReadOnlyList<RecentFailure> RecentFailures);
+    IReadOnlyList<RecentFailure> RecentFailures, bool IsScanning = false, int FilesChecked = 0, DateTime? LastScanAtLocal = null, string? ScanError = null);

@@ -47,6 +47,9 @@ public sealed class UploadWatcherService : IDisposable
     private int _safetyScanRunning;
     private string? _currentFileName;
     private double? _currentFileProgressPercent;
+    private int _filesChecked;
+    private DateTime? _lastScanAtLocal;
+    private string? _scanError;
     private string _lastStatusText = Loc.T("status.stopped");
 
     /// history is shared with PhotoSyncService when provided, so files it downloads (marked
@@ -100,7 +103,7 @@ public sealed class UploadWatcherService : IDisposable
     public WatcherActivitySnapshot GetCurrentSnapshot()
     {
         lock (_activityLock)
-            return new(_lastStatusText, _currentFileName, _currentFileProgressPercent, GetQueueCount(), _recentUploads.ToList(), _recentFailures.ToList());
+            return new(_lastStatusText, _currentFileName, _currentFileProgressPercent, GetQueueCount(), _recentUploads.ToList(), _recentFailures.ToList(), _safetyScanRunning != 0, _filesChecked, _lastScanAtLocal, _scanError);
     }
 
     private void RaiseActivity(string statusText)
@@ -110,7 +113,7 @@ public sealed class UploadWatcherService : IDisposable
         {
             _lastStatusText = statusText;
             snapshot = new WatcherActivitySnapshot(statusText, _currentFileName, _currentFileProgressPercent,
-                GetQueueCount(), _recentUploads.ToList(), _recentFailures.ToList());
+                GetQueueCount(), _recentUploads.ToList(), _recentFailures.ToList(), _safetyScanRunning != 0, _filesChecked, _lastScanAtLocal, _scanError);
         }
         ActivityChanged?.Invoke(snapshot);
     }
@@ -229,6 +232,7 @@ public sealed class UploadWatcherService : IDisposable
             if (!queue.Writer.TryWrite(fullPath))
             {
                 _pendingPaths.Remove(fullPath);
+                _scanError = Loc.T("activity.queueFull");
                 AppLogger.Log($"VAROITUS: latausjono on täynnä, '{fullPath}' tarkistetaan seuraavassa skannauksessa.");
             }
         }
@@ -262,17 +266,19 @@ public sealed class UploadWatcherService : IDisposable
         if (_paused || !IsRunning || Interlocked.CompareExchange(ref _safetyScanRunning, 1, 0) != 0) return;
         try
         {
+            lock (_activityLock) { _filesChecked = 0; _scanError = null; }
+            RaiseActivity(Loc.T("activity.scanning", 0));
             foreach (var dir in _config.Directories)
             {
                 ct.ThrowIfCancellationRequested(); TryEnsureWatcher(dir);
-                if (!Directory.Exists(dir)) continue;
-                foreach (var file in EnumerateFilesPruningExcluded(dir)) { ct.ThrowIfCancellationRequested(); if (IsCandidate(file)) Enqueue(file); }
+                if (!Directory.Exists(dir)) { lock (_activityLock) _scanError = Loc.T("activity.folderMissing", dir); continue; }
+                foreach (var file in EnumerateFilesPruningExcluded(dir)) { ct.ThrowIfCancellationRequested(); if (IsCandidate(file)) { lock (_activityLock) _filesChecked++; Enqueue(file); if (_filesChecked % 100 == 0) RaiseActivity(Loc.T("activity.scanning", _filesChecked)); } }
             }
             await RetryPendingAlbumsAsync(ct);
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { AppLogger.Log($"VIRHE turvapollauksessa: {ex.Message}"); }
-        finally { Interlocked.Exchange(ref _safetyScanRunning, 0); }
+        catch (Exception ex) { lock (_activityLock) _scanError = ex.Message; AppLogger.Log($"VIRHE turvapollauksessa: {ex.Message}"); }
+        finally { Interlocked.Exchange(ref _safetyScanRunning, 0); lock (_activityLock) _lastScanAtLocal = DateTime.Now; RaiseActivity(_paused ? Loc.T("status.paused") : Loc.T("status.idle")); }
     }
 
     private IEnumerable<string> EnumerateFilesPruningExcluded(string root)
@@ -282,7 +288,7 @@ public sealed class UploadWatcherService : IDisposable
         {
             IEnumerable<string> subDirs; IEnumerable<string> files;
             try { subDirs = Directory.GetDirectories(current); files = Directory.GetFiles(current); }
-            catch { continue; }
+            catch (Exception ex) { lock (_activityLock) _scanError = ex.Message; continue; }
             foreach (var file in files) yield return file;
             foreach (var subDir in subDirs) if (!IsExcluded(subDir + Path.DirectorySeparatorChar)) stack.Push(subDir);
         }

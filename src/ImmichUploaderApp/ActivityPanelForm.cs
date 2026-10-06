@@ -14,6 +14,8 @@ public sealed class ActivityPanelForm : Form
     private readonly Palette _palette;
 
     private Label _statusLabel = null!;
+    private Label _downloadStatusLabel = null!, _uploadSummaryLabel = null!, _downloadSummaryLabel = null!;
+    private FlatProgressBar _downloadProgressBar = null!;
     private Label _failureLabel = null!;
     private FlatProgressBar _uploadProgressBar = null!;
     private DoubleBufferedFlowLayoutPanel _recentList = null!;
@@ -38,7 +40,7 @@ public sealed class ActivityPanelForm : Form
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
         TopMost = true;
-        ClientSize = new Size(440, 560);
+        ClientSize = new Size(500, 680);
         KeyPreview = true;
         BackColor = _palette.Background;
 
@@ -115,13 +117,13 @@ public sealed class ActivityPanelForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 9,
+            RowCount = 13,
             BackColor = _palette.Background,
         };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 9; i++)
+        for (var i = 0; i < 13; i++)
         {
-            table.RowStyles.Add(new RowStyle(i == 4 ? SizeType.Percent : SizeType.AutoSize, i == 4 ? 100 : 0));
+            table.RowStyles.Add(new RowStyle(i == 8 ? SizeType.Percent : SizeType.AutoSize, i == 8 ? 100 : 0));
         }
         outer.Controls.Add(table);
 
@@ -131,7 +133,7 @@ public sealed class ActivityPanelForm : Form
             FlowDirection = FlowDirection.LeftToRight,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            WrapContents = false,
+            WrapContents = true,
             BackColor = _palette.Background,
         };
         var titleLabel = new Label
@@ -178,6 +180,13 @@ public sealed class ActivityPanelForm : Form
         header.Controls.Add(titleLabel);
         header.Controls.Add(openServerButton);
         header.Controls.Add(settingsButton);
+        var scanButton = new Button { Text = Loc.T("activity.check"), AutoSize = true, FlatStyle = FlatStyle.Flat, ForeColor = _palette.Accent, BackColor = _palette.Background };
+        scanButton.Click += (_, _) => { _watcher.ScanNow(); _photoSync.ScanNow(); };
+        header.Controls.Add(scanButton);
+        _uploadSummaryLabel = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = _palette.TextMuted, Margin = new Padding(0, 0, 0, 12) };
+        _downloadStatusLabel = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = _palette.Text, Margin = new Padding(0, 0, 0, 6) };
+        _downloadSummaryLabel = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = _palette.TextMuted, Margin = new Padding(0, 0, 0, 12) };
+        _downloadProgressBar = new FlatProgressBar { Dock = DockStyle.Fill, Height = 6, TrackColor = _palette.Track, FillColor = _palette.Accent, Visible = false };
 
         _statusLabel = new Label
         {
@@ -253,12 +262,16 @@ public sealed class ActivityPanelForm : Form
         table.Controls.Add(header, 0, 0);
         table.Controls.Add(_statusLabel, 0, 1);
         table.Controls.Add(_uploadProgressBar, 0, 2);
-        table.Controls.Add(_failureLabel, 0, 3);
-        table.Controls.Add(_recentList, 0, 4);
-        table.Controls.Add(separator1, 0, 5);
-        table.Controls.Add(storageHeader, 0, 6);
-        table.Controls.Add(_storageProgressBar, 0, 7);
-        table.Controls.Add(_storageLabel, 0, 8);
+        table.Controls.Add(_uploadSummaryLabel, 0, 3);
+        table.Controls.Add(_downloadStatusLabel, 0, 4);
+        table.Controls.Add(_downloadProgressBar, 0, 5);
+        table.Controls.Add(_downloadSummaryLabel, 0, 6);
+        table.Controls.Add(_failureLabel, 0, 7);
+        table.Controls.Add(_recentList, 0, 8);
+        table.Controls.Add(separator1, 0, 9);
+        table.Controls.Add(storageHeader, 0, 10);
+        table.Controls.Add(_storageProgressBar, 0, 11);
+        table.Controls.Add(_storageLabel, 0, 12);
     }
 
     private void PositionNearTray()
@@ -299,7 +312,15 @@ public sealed class ActivityPanelForm : Form
         {
             if (IsDisposed) return;
 
-            _statusLabel.Text = snapshot.StatusText;
+            var state = snapshot.CurrentFileName is { } file ? Loc.T("status.uploading", file) + (snapshot.CurrentFileProgressPercent is { } value ? $" ({value:0}%)" : "")
+                : _watcher.IsPaused ? Loc.T("status.paused")
+                : !_watcher.IsRunning ? snapshot.StatusText
+                : snapshot.IsScanning ? Loc.T("activity.scanning", snapshot.FilesChecked)
+                : snapshot.ScanError is { } error ? Loc.T("activity.error", error)
+                : snapshot.QueueCount > 0 ? Loc.T("status.queued", snapshot.QueueCount)
+                : snapshot.LastScanAtLocal is null ? Loc.T("activity.waiting") : Loc.T("activity.idle");
+            _statusLabel.Text = Loc.T("activity.upload") + "\n" + state;
+            _uploadSummaryLabel.Text = Loc.T("activity.queue", ScanSummary(snapshot.FilesChecked, snapshot.LastScanAtLocal), snapshot.QueueCount) + (snapshot.ScanError is { } scanError && snapshot.IsScanning ? "\n" + Loc.T("activity.error", scanError) : "");
             var failure = snapshot.RecentFailures.FirstOrDefault();
             _failureLabel.Visible = failure is not null;
             _failureLabel.Text = failure is null ? string.Empty : $"{failure.FileName}: {failure.Message}";
@@ -314,8 +335,7 @@ public sealed class ActivityPanelForm : Form
                 _uploadProgressBar.Visible = false;
             }
 
-            _lastUploads = snapshot.RecentUploads;
-            RenderActivity();
+            if (!_lastUploads.SequenceEqual(snapshot.RecentUploads)) { _lastUploads = snapshot.RecentUploads; RenderActivity(); }
         });
     }
 
@@ -324,11 +344,26 @@ public sealed class ActivityPanelForm : Form
         RunOnUiThread(() =>
         {
             if (IsDisposed) return;
-            _lastDownloads = snapshot.RecentDownloads;
-            _lastDeletions = snapshot.RecentDeletions;
-            RenderActivity();
+            var state = !_config.SyncEnabled ? Loc.T("activity.disabled")
+                : !_photoSync.IsRunning ? snapshot.StatusText
+                : snapshot.CurrentFileName is { } file ? file + (snapshot.ProgressPercent is { } percent ? $" ({percent:0}%)" : $" ({FormatBytes(snapshot.BytesTransferred)})")
+                : snapshot.IsScanning ? Loc.T("activity.scanning", snapshot.FilesChecked)
+                : snapshot.ScanError is { } error ? Loc.T("activity.error", error)
+                : snapshot.LastScanAtLocal is null ? Loc.T("activity.waiting") : Loc.T("activity.idle");
+            _downloadStatusLabel.Text = Loc.T("activity.download") + "\n" + state;
+            _downloadSummaryLabel.Text = ScanSummary(snapshot.FilesChecked, snapshot.LastScanAtLocal) + "\n" + Loc.T("activity.received", snapshot.FilesTransferred) + (snapshot.ScanError is { } scanError && snapshot.IsScanning ? "\n" + Loc.T("activity.error", scanError) : "");
+            _downloadProgressBar.Visible = snapshot.ProgressPercent is not null;
+            _downloadProgressBar.Value = snapshot.ProgressPercent is { } progress ? (int)Math.Round(progress) : 0;
+            if (!_lastDownloads.SequenceEqual(snapshot.RecentDownloads) || !_lastDeletions.SequenceEqual(snapshot.RecentDeletions))
+            {
+                _lastDownloads = snapshot.RecentDownloads;
+                _lastDeletions = snapshot.RecentDeletions;
+                RenderActivity();
+            }
         });
     }
+
+    private static string ScanSummary(int count, DateTime? at) => at is { } time ? Loc.T("activity.summary", count, time) : Loc.T("activity.scanning", count);
 
     private void RunOnUiThread(Action action)
     {
@@ -614,6 +649,7 @@ public sealed class ActivityPanelForm : Form
         // before its native handle exists do not reliably show once the handle is later created.
         OnWatcherActivityChanged(_watcher.GetCurrentSnapshot());
         OnPhotoSyncActivityChanged(_photoSync.GetCurrentSnapshot());
+        RenderActivity();
 
         try
         {

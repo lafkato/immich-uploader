@@ -1,3 +1,23 @@
+# v1.2.6
+
+## Suomi
+
+- Näytetään lähetyksen ja vastaanoton tila erikseen, myös tarkistus, tauko ja odotus.
+- Näytetään tarkistettujen tiedostojen määrä, lähetysjono ja viimeisen tarkistuksen aika.
+- Vastaanotto näyttää nykyisen tiedoston ja etenemisprosentin tai vastaanotetut tavut.
+- Lisätään Tarkista nyt -painike molempien suuntien tarkistamiseen.
+- Näytetään puuttuvat kansiot, tarkistusvirheet ja täysi lähetysjono selvästi.
+- Vähennetään listan uudelleenpiirtoa siirtojen edetessä.
+
+## English
+
+- Show separate live upload and download status, scan counts, queue length and last check time.
+- Display the current download and byte progress, with a Check now action for both directions.
+- Surface incomplete scans and unavailable folders instead of claiming everything is up to date.
+- Avoid rebuilding activity rows for every progress notification.
+
+Validation: Release build, smoke/regression tests for scan state, current download progress, idle/error display and byte reporting; activity panel rendering checked.
+
 # v1.2.5
 
 ## Suomi

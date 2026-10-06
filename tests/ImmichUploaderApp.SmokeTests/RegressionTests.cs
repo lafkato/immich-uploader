@@ -54,6 +54,11 @@ internal static class RegressionTests
             await InvokeAsync(sync, "ReconcileLocalDeletionsAsync", CancellationToken.None);
             check(handler.DeleteCalls == 2 && manifest.TryGet("missing", out var done) && done.LocallyDeleted && !done.PendingRemoteTrash, "Pending remote trash is retried successfully");
             config.SyncDeleteRemoteOnLocalDelete = false;
+            long receivedBytes = -1, totalBytes = -1;
+            var progressFile = Path.Combine(root, "progress.bin");
+            await client.DownloadOriginalAsync("progress", progressFile, CancellationToken.None, (bytes, total) => { receivedBytes = bytes; totalBytes = total; });
+            check(receivedBytes == new FileInfo(progressFile).Length && receivedBytes == totalBytes, "Download progress reports actual received bytes and content length");
+            handler.DownloadCalls = 0;
             var asset = new AssetSummary { Id = "12345678-asset", OriginalFileName = "local.jpg", Type = "IMAGE", FileCreatedAt = new DateTime(2026, 1, 1) };
             var destinations = (List<string>)typeof(PhotoSyncService).GetMethod("BuildDestinationPaths", Private)!.Invoke(sync, new object[] { asset })!;
             manifest.Set(asset.Id, new(destinations, "Original", DateTime.UtcNow));
@@ -83,6 +88,7 @@ internal static class RegressionTests
             using var lifecycle = new PhotoSyncService(history, new SyncManifestStore(Path.Combine(root, "lifecycle.json")), Path.Combine(root, "lifecycle-recent.json"), c => new ImmichClient(c.ServerUrl, c.ApiKey, blockedHttp));
             await lifecycle.StartAsync(config);
             await blocking.SearchStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            check(lifecycle.GetCurrentSnapshot().IsScanning, "Active remote search reports scanning before assets arrive");
             await lifecycle.StopAsync().WaitAsync(TimeSpan.FromSeconds(10));
             check(blocking.SearchCancelled && !lifecycle.IsRunning, "Stop waits for in-flight scan cancellation");
 
@@ -110,12 +116,39 @@ internal static class RegressionTests
                     check(exclusions.Contains(deep), "Saving unexpanded exclusion tree preserves deep exclusions");
                     using var panelWatcher = new UploadWatcherService(new UploadHistoryStore(Path.Combine(root, "panel-history.json")), Path.Combine(root, "panel-upload.json"));
                     using var panelSync = new PhotoSyncService(new UploadHistoryStore(Path.Combine(root, "panel-history-2.json")), new SyncManifestStore(Path.Combine(root, "panel-manifest.json")), Path.Combine(root, "panel-download.json"));
-                    using var panel = new ActivityPanelForm(panelWatcher, panelSync, new AppConfig(), () => { });
+                    using var panel = new ActivityPanelForm(panelWatcher, panelSync, new AppConfig { SyncEnabled = true }, () => { });
                     var row = (Control)typeof(ActivityPanelForm).GetMethod("BuildActivityRow", Private)!.Invoke(panel, new object?[] { "photo.jpg", DateTime.Now, null, null, 300 })!;
                     var list = (Control)typeof(ActivityPanelForm).GetField("_recentList", Private)!.GetValue(panel)!;
                     list.Controls.Add(row);
                     typeof(ActivityPanelForm).GetMethod("ClearActivityRows", Private)!.Invoke(panel, null);
                     check(row.IsDisposed && row.Controls.Count == 0, "Activity list redraw disposes removed row controls");
+                    panel.Show();
+                    Application.DoEvents();
+                    _ = panel.Handle;
+                    Set(panelWatcher, "_cts", new CancellationTokenSource());
+                    Set(panelSync, "_cts", new CancellationTokenSource());
+                    var uploadHandler = typeof(ActivityPanelForm).GetMethod("OnWatcherActivityChanged", Private)!;
+                    var downloadHandler = typeof(ActivityPanelForm).GetMethod("OnPhotoSyncActivityChanged", Private)!;
+                    var uploadLabel = (Label)typeof(ActivityPanelForm).GetField("_statusLabel", Private)!.GetValue(panel)!;
+                    var downloadLabel = (Label)typeof(ActivityPanelForm).GetField("_downloadStatusLabel", Private)!.GetValue(panel)!;
+                    uploadHandler.Invoke(panel, new object[] { new WatcherActivitySnapshot("idle", null, null, 0, Array.Empty<RecentUpload>(), Array.Empty<RecentFailure>()) });
+                    check(uploadLabel.Text.Contains(Loc.T("activity.waiting")), "Activity does not claim up-to-date before first scan");
+                    uploadHandler.Invoke(panel, new object[] { new WatcherActivitySnapshot("idle", null, null, 0, Array.Empty<RecentUpload>(), Array.Empty<RecentFailure>(), true, 123) });
+                    check(uploadLabel.Text.Contains("123"), "Upload scanning shows live examined-file count");
+                    downloadHandler.Invoke(panel, new object[] { new PhotoSyncActivitySnapshot("scan", Array.Empty<RecentDownload>(), Array.Empty<RecentDeletion>(), true, 42, 3, "example.jpg", 50, 1048576) });
+                    check(downloadLabel.Text.Contains("example.jpg") && downloadLabel.Text.Contains("50%"), "Download activity exposes current file and progress");
+                    if (Environment.GetEnvironmentVariable("IMMICH_ACTIVITY_PREVIEW") is { } preview)
+                    {
+                        panel.PerformLayout();
+                        using var bitmap = new System.Drawing.Bitmap(panel.Width, panel.Height);
+                        panel.DrawToBitmap(bitmap, new System.Drawing.Rectangle(0, 0, panel.Width, panel.Height));
+                        bitmap.Save(preview);
+                    }
+                    downloadHandler.Invoke(panel, new object[] { new PhotoSyncActivitySnapshot("idle", Array.Empty<RecentDownload>(), Array.Empty<RecentDeletion>(), false, 42, 3, LastScanAtLocal: DateTime.Now) });
+                    check(downloadLabel.Text.Contains(Loc.T("activity.idle")), "Finished download scan explicitly shows no pending transfer");
+                    downloadHandler.Invoke(panel, new object[] { new PhotoSyncActivitySnapshot("idle", Array.Empty<RecentDownload>(), Array.Empty<RecentDeletion>(), LastScanAtLocal: DateTime.Now, ScanError: "offline") });
+                    check(downloadLabel.Text.Contains("offline"), "Failed scan remains visible instead of claiming up-to-date");
+
                 }
                 catch (Exception ex) { uiError = ex; }
             });

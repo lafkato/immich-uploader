@@ -216,11 +216,11 @@ public sealed class ImmichClient : IDisposable
         return (items, hasMore);
     }
 
-    public Task DownloadOriginalAsync(string assetId, string destinationPath, CancellationToken ct = default) =>
-        DownloadAssetFileAsync($"assets/{assetId}/original", destinationPath, ct);
+    public Task DownloadOriginalAsync(string assetId, string destinationPath, CancellationToken ct = default, Action<long, long>? progress = null) =>
+        DownloadAssetFileAsync($"assets/{assetId}/original", destinationPath, ct, progress);
 
-    public Task DownloadThumbnailAsync(string assetId, string destinationPath, CancellationToken ct = default) =>
-        DownloadAssetFileAsync($"assets/{assetId}/thumbnail", destinationPath, ct);
+    public Task DownloadThumbnailAsync(string assetId, string destinationPath, CancellationToken ct = default, Action<long, long>? progress = null) =>
+        DownloadAssetFileAsync($"assets/{assetId}/thumbnail", destinationPath, ct, progress);
 
     /// <summary>In-memory variant used only to build the small activity-panel preview image for
     /// videos, whose downloaded original obviously can't be decoded as a still frame - Immich's
@@ -237,7 +237,7 @@ public sealed class ImmichClient : IDisposable
         return await response.Content.ReadAsByteArrayAsync(ct);
     }
 
-    private async Task DownloadAssetFileAsync(string requestUri, string destinationPath, CancellationToken ct)
+    private async Task DownloadAssetFileAsync(string requestUri, string destinationPath, CancellationToken ct, Action<long, long>? progress)
     {
         using var response = await _http.GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
@@ -248,7 +248,19 @@ public sealed class ImmichClient : IDisposable
 
         await using var httpStream = await response.Content.ReadAsStreamAsync(ct);
         await using var fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true);
-        await httpStream.CopyToAsync(fileStream, ct);
+        var total = response.Content.Headers.ContentLength ?? 0;
+        long received = 0;
+        var buffer = new byte[81920];
+        progress?.Invoke(0, total);
+        int count;
+        while ((count = await httpStream.ReadAsync(buffer, ct)) > 0)
+        {
+            await fileStream.WriteAsync(buffer.AsMemory(0, count), ct);
+            received += count;
+            progress?.Invoke(received, total);
+        }
+        if (total > 0 && received != total) throw new IOException("Incomplete download.");
+        progress?.Invoke(received, total);
     }
 
     /// <summary>Moves assets to Immich's trash (recoverable). Never passes force=true, which would
