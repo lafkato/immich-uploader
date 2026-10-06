@@ -868,11 +868,12 @@ public sealed class SettingsForm : Form
                 var percent = total > 0 ? (int)(done * 100 / total) : 0;
                 _lblUpdateResult.ForeColor = _palette.Text;
                 _lblUpdateResult.Text = Loc.T("settings.downloadingUpdate", percent);
-            });
+            }, expectedDigest: pendingUpdate.Digest, expectedSize: pendingUpdate.Size);
         }
         catch (Exception ex)
         {
             _lblUpdateResult.ForeColor = Color.Firebrick;
+            AppLogger.Log($"UPDATE DOWNLOAD FAILED: {ex}");
             _lblUpdateResult.Text = Loc.T("settings.updateDownloadFailed", ex.Message);
             _btnDownloadUpdate.Enabled = true;
             return;

@@ -5,15 +5,23 @@ using ImmichUploaderApp.Models;
 
 namespace ImmichUploaderApp.Services;
 
-public sealed record UpdateCheckResult(Version LatestVersion, string TagName, string? DownloadUrl, string? ReleaseUrl);
+public sealed record UpdateCheckResult(Version LatestVersion, string TagName, string? DownloadUrl, string? ReleaseUrl, string? Digest = null, long Size = 0);
 
 public sealed class UpdateService
 {
     private const string ReleasesApiUrl = "https://api.github.com/repos/lafkato/immich-uploader/releases/latest";
 
     private static readonly HttpClient Http = CreateHttpClient();
+    private static readonly HttpClient DownloadHttp = CreateDownloadHttpClient();
     private readonly HttpClient _http;
-    public UpdateService(HttpClient? http = null) => _http = http ?? Http;
+    private readonly HttpClient _downloadHttp;
+    public UpdateService(HttpClient? http = null) { _http = http ?? Http; _downloadHttp = http ?? DownloadHttp; }
+    private static HttpClient CreateDownloadHttpClient()
+    {
+        var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("ImmichUploaderApp");
+        return http;
+    }
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private static HttpClient CreateHttpClient()
@@ -43,33 +51,68 @@ public sealed class UpdateService
 
         var installerAsset = release.Assets.FirstOrDefault(a => a.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
 
-        return new UpdateCheckResult(latestVersion, release.TagName, installerAsset?.DownloadUrl, release.HtmlUrl);
+        return new UpdateCheckResult(latestVersion, release.TagName, installerAsset?.DownloadUrl, release.HtmlUrl, installerAsset?.Digest, installerAsset?.Size ?? 0);
     }
 
     public async Task<string> DownloadInstallerAsync(string downloadUrl, string fileName,
-        Action<long, long>? onProgress = null, CancellationToken ct = default)
+        Action<long, long>? onProgress = null, CancellationToken ct = default,
+        string? expectedDigest = null, long expectedSize = 0)
     {
-        var tempPath = Path.Combine(Path.GetTempPath(), fileName);
-
-        using var response = await _http.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException($"Latauksen haku epaonnistui ({(int)response.StatusCode} {response.StatusCode}).");
-
-        var totalBytes = response.Content.Headers.ContentLength ?? -1;
-        await using var httpStream = await response.Content.ReadAsStreamAsync(ct);
-        await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true);
-
-        var buffer = new byte[1 << 16];
-        long bytesRead = 0;
-        int read;
-        while ((read = await httpStream.ReadAsync(buffer, ct)) > 0)
+        if (string.IsNullOrWhiteSpace(fileName) || fileName != Path.GetFileName(fileName))
+            throw new ArgumentException("Invalid installer filename.", nameof(fileName));
+        // Each attempt gets its own directory so an existing installer cannot lock the download.
+        var folder = Path.Combine(Path.GetTempPath(), "ImmichUploader", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var finalPath = Path.Combine(folder, fileName);
+        var partialPath = finalPath + ".partial";
+        try
         {
-            await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-            bytesRead += read;
-            onProgress?.Invoke(bytesRead, totalBytes);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromMinutes(10));
+            using var request = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
+            request.Headers.Accept.ParseAdd("application/octet-stream");
+            using var response = await _downloadHttp.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            if (!response.IsSuccessStatusCode)
+                throw new HttpRequestException($"Installer download failed ({(int)response.StatusCode} {response.StatusCode}).");
+            var totalBytes = expectedSize > 0 ? expectedSize : response.Content.Headers.ContentLength ?? -1;
+            long bytesRead = 0;
+            await using (var httpStream = await response.Content.ReadAsStreamAsync(timeout.Token))
+            await using (var fileStream = new FileStream(partialPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+            {
+                var buffer = new byte[1 << 16];
+                int read;
+                while ((read = await httpStream.ReadAsync(buffer, timeout.Token)) > 0)
+                {
+                    await fileStream.WriteAsync(buffer.AsMemory(0, read), timeout.Token);
+                    bytesRead += read;
+                    onProgress?.Invoke(bytesRead, totalBytes);
+                }
+            }
+            if (totalBytes > 0 && bytesRead != totalBytes) throw new InvalidDataException("Installer download is incomplete. Please retry.");
+            await using (var stream = File.OpenRead(partialPath))
+            {
+                if (stream.ReadByte() != 'M' || stream.ReadByte() != 'Z') throw new InvalidDataException("Downloaded file is not a Windows installer.");
+                if (expectedDigest?.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    stream.Position = 0;
+                    var hash = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(stream, timeout.Token));
+                    if (!hash.Equals(expectedDigest[7..], StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Installer checksum mismatch. Please retry.");
+                }
+            }
+            File.Move(partialPath, finalPath);
+            return finalPath;
         }
-
-        return tempPath;
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException("Installer download timed out after 10 minutes. Please retry or download from the release page.");
+        }
+        finally
+        {
+            if (!File.Exists(finalPath))
+            {
+                try { File.Delete(partialPath); Directory.Delete(folder); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+        }
     }
 
     /// <summary>

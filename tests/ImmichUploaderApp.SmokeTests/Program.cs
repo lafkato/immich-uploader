@@ -3,6 +3,8 @@ using System.Text.Json;
 using ImmichUploaderApp.Models;
 using ImmichUploaderApp.Services;
 
+if (args.Contains("--verify-release-download")) return await UpdateDownloadTests.VerifyLiveReleaseAsync();
+
 var failures = new List<string>();
 void Check(bool condition, string name) { if (!condition) failures.Add(name); }
 
@@ -42,6 +44,7 @@ Check(!UpdateService.IsNewer(new Version(1, 0, 2), new Version(1, 0, 2, 0)), "3-
 Check(UpdateService.IsNewer(new Version(2, 0, 0), new Version(1, 9, 9)), "Major version bump is newer");
 
 await RegressionTests.RunAsync(Check);
+await UpdateDownloadTests.RunAsync(Check);
 
 if (failures.Count > 0)
 {

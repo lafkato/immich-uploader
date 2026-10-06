@@ -1,3 +1,22 @@
+# v1.2.4
+
+## Suomi
+
+- Korjataan päivityksen lataus, kun vanha samanniminen EXE-tiedosto on toisen prosessin lukitsema. Jokainen lataus käyttää omaa tilapäiskansiota ja valmis tiedosto suljetaan ennen asennusta.
+- Käytetään asennuspaketin lataukseen erillistä aikarajaa ja binääritiedoston pyyntöotsaketta.
+- Tarkistetaan ladatun EXE:n koko ja GitHubin SHA-256-tarkistussumma; epäonnistuneet osittaiset lataukset poistetaan.
+- Tallennetaan päivityksen latausvirheen tarkat tiedot lokiin.
+
+**Vanhan version päivitys:** jos v1.2.2:n tai v1.2.3:n lataus jää tiedostolukon vuoksi jumiin, asenna tämä korjaus suoraan GitHubin ImmichUploaderSetup-1.2.4.exe-tiedostolla. Korjattu versio hakee tulevat päivitykset GitHubista erilliseen tilapäiskansioon.
+
+## English
+
+- Download each installer to a unique temporary directory so a locked installer from an earlier attempt cannot block the update.
+- Separate installer transfer timeout from the short release-metadata timeout and request binary content.
+- Verify installer size and GitHub SHA-256 digest, clean up incomplete downloads, and log download errors.
+
+Validation: Release build, smoke tests, locked-file download regression, checksum and incomplete-file checks.
+
 # v1.2.3
 
 ## Suomi
