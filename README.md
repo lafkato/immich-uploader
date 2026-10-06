@@ -62,6 +62,8 @@ Lataussuunta toimii myös toisin päin: Immich Uploader voi peilata koko Immich-
 dotnet publish src\ImmichUploaderApp\ImmichUploaderApp.csproj -c Release -o publish\release
 ```
 
+Asennuspaketissa on sovelluksen oma kuvake ja aloituskuva, ja sen teema seuraa Windowsin asetusta. Grafiikat voi rakentaa uudelleen komennolla `powershell -File installer\GenerateBranding.ps1`.
+
 Asennuspaketti tehdään Inno Setup 6:lla tiedostosta `installer\ImmichUploader.iss`. Asennuspaketti ottaa mukaan koko `publish\release`-kansion.
 
 ### Tue kehitystä ☕

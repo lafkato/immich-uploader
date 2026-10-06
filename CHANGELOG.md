@@ -1,3 +1,20 @@
+# v1.3.1
+
+## Suomi
+
+- Uudistettu EXE-asennuspaketti sovelluksen omalla kuvakkeella.
+- Oma aloituskuva, sovelluskuvake myös asennuksen otsakkeessa ja selkeämpi tervetuloteksti.
+- Moderni asennusikkuna mukautuu Windowsin tummaan tai vaaleaan teemaan.
+- Suurempi asennusikkuna ja pikakuvakevalintojen käännökset kaikilla neljällä kielellä.
+
+## English
+
+- Brand the setup executable with the application icon, welcome artwork and header icon.
+- Use a larger modern wizard that follows Windows light/dark mode.
+- Refresh the welcome copy and translate shortcut group labels in all four languages.
+
+Validation: Inno Setup compilation; real wizard welcome and license pages checked, setup EXE icon extracted and verified, application smoke/regression suite.
+
 # v1.3.0
 
 ## Suomi
