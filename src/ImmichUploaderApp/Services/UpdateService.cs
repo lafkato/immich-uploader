@@ -12,6 +12,8 @@ public sealed class UpdateService
     private const string ReleasesApiUrl = "https://api.github.com/repos/lafkato/immich-uploader/releases/latest";
 
     private static readonly HttpClient Http = CreateHttpClient();
+    private readonly HttpClient _http;
+    public UpdateService(HttpClient? http = null) => _http = http ?? Http;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private static HttpClient CreateHttpClient()
@@ -27,7 +29,7 @@ public sealed class UpdateService
 
     public async Task<UpdateCheckResult> CheckForUpdateAsync(CancellationToken ct = default)
     {
-        using var response = await Http.GetAsync(ReleasesApiUrl, ct);
+        using var response = await _http.GetAsync(ReleasesApiUrl, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"GitHub palautti virheen ({(int)response.StatusCode} {response.StatusCode}).");
@@ -49,7 +51,7 @@ public sealed class UpdateService
     {
         var tempPath = Path.Combine(Path.GetTempPath(), fileName);
 
-        using var response = await Http.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _http.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"Latauksen haku epaonnistui ({(int)response.StatusCode} {response.StatusCode}).");
 

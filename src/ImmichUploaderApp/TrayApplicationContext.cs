@@ -18,9 +18,15 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly ConfigService _configService = new();
     // Shared so PhotoSyncService can mark downloaded files "known" here and UploadWatcherService
     // never re-uploads them - what makes an overlapping sync/watch folder actually safe.
-    private readonly UploadHistoryStore _uploadHistory = new();
-    private readonly UploadWatcherService _watcher;
-    private readonly PhotoSyncService _photoSync;
+    private UploadHistoryStore _uploadHistory = null!;
+    private UploadWatcherService _watcher = null!;
+    private PhotoSyncService _photoSync = null!;
+    private readonly SemaphoreSlim _restartGate = new(1, 1);
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly System.Windows.Forms.Timer _updateTimer = new() { Interval = 6 * 60 * 60 * 1000 };
+    private bool _checkingUpdate;
+    private string? _notifiedUpdate;
+    private bool _exiting;
 
     private AppConfig _config;
     private ActivityPanelForm? _activityPanel;
@@ -39,16 +45,15 @@ public sealed class TrayApplicationContext : ApplicationContext
     public TrayApplicationContext()
     {
         _ = _uiThreadSync.Handle; // Forces handle creation now, on the UI thread.
-        _watcher = new UploadWatcherService(_uploadHistory);
-        _photoSync = new PhotoSyncService(_uploadHistory);
         _config = _configService.LoadOrCreate();
+        CreateServices(_config);
         Loc.Language = _config.Language;
 
         _statusItem = new ToolStripMenuItem(Loc.T("tray.statusFormat", Loc.T("status.stopped"))) { Enabled = false };
         _pauseResumeItem = new ToolStripMenuItem(Loc.T("tray.pause"), null, OnPauseResumeClicked);
         _openServerItem = new ToolStripMenuItem(Loc.T("tray.openServer"), null, OnOpenServerClicked);
         _settingsItem = new ToolStripMenuItem(Loc.T("tray.settings"), null, OnSettingsClicked);
-        _scanNowItem = new ToolStripMenuItem(GetScanNowText(), null, (_, _) => _watcher.ScanNow());
+        _scanNowItem = new ToolStripMenuItem(GetScanNowText(), null, (_, _) => { _watcher.ScanNow(); _photoSync.ScanNow(); });
         _donateItem = new ToolStripMenuItem(DonationService.MenuText, null, (_, _) => DonationService.ShowPrompt());
         _viewLogItem = new ToolStripMenuItem(Loc.T("tray.viewLog"), null, OnViewLogClicked);
         _exitItem = new ToolStripMenuItem(Loc.T("tray.exit"), null, OnExitClicked);
@@ -80,6 +85,10 @@ public sealed class TrayApplicationContext : ApplicationContext
         _trayIcon.MouseClick += OnTrayIconMouseClick;
 
         _watcher.ActivityChanged += OnWatcherActivityChanged;
+        _trayIcon.BalloonTipClicked += (_, _) => ShowSettings(forceOpen: false);
+        _updateTimer.Tick += (_, _) => _ = CheckForUpdatesAsync();
+        _updateTimer.Start();
+        _ = CheckForUpdatesAsync();
 
         if (!_config.IsConfigured || Environment.GetEnvironmentVariable("IMMICH_FORCE_SETTINGS") == "1")
         {
@@ -87,39 +96,69 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
         else
         {
-            _ = StartWatcherAsync();
-            _ = StartPhotoSyncAsync();
+            _ = RestartServicesAsync(_config);
             if (Environment.GetEnvironmentVariable("IMMICH_FORCE_ACTIVITY_PANEL") == "1") ShowActivityPanel();
         }
     }
 
-    private async Task StartWatcherAsync()
+    private void CreateServices(AppConfig config)
     {
+        string? PathFor(string name) => config.IsConfigured ? ConfigService.GetScopedStatePath(config, name) : null;
+        _uploadHistory = new UploadHistoryStore(PathFor("upload-history.json"));
+        _watcher = new UploadWatcherService(_uploadHistory, PathFor("upload-recent-activity.json"));
+        _photoSync = new PhotoSyncService(_uploadHistory, new SyncManifestStore(PathFor("sync-manifest.json")), PathFor("sync-recent-activity.json"));
+    }
+
+    private async Task RestartServicesAsync(AppConfig config)
+    {
+        await _restartGate.WaitAsync();
         try
         {
-            await _watcher.StartAsync(_config);
+            if (_exiting) return;
+            _activityPanel?.Close();
+            await _watcher.StopAsync();
+            await _photoSync.StopAsync();
+            _watcher.ActivityChanged -= OnWatcherActivityChanged;
+            _watcher.Dispose(); _photoSync.Dispose();
+            CreateServices(config);
+            _watcher.ActivityChanged += OnWatcherActivityChanged;
+            await _watcher.StartAsync(config, _shutdown.Token);
+            if (!_exiting) await _photoSync.StartAsync(config, _shutdown.Token);
         }
         catch (Exception ex)
         {
             AppLogger.LogFatal(ex);
-            _trayIcon.ShowBalloonTip(5000, Loc.T("app.name"), Loc.T("status.startFailed", ex.Message), ToolTipIcon.Error);
+            if (!_exiting) _trayIcon.ShowBalloonTip(5000, Loc.T("app.name"), Loc.T("status.startFailed", ex.Message), ToolTipIcon.Error);
         }
+        finally { _restartGate.Release(); }
     }
 
-    private async Task StartPhotoSyncAsync()
+    private async Task CheckForUpdatesAsync()
     {
+        if (_checkingUpdate || _exiting) return;
+        _checkingUpdate = true;
         try
         {
-            await _photoSync.StartAsync(_config);
+            var update = await new UpdateService().CheckForUpdateAsync(_shutdown.Token);
+            if (_exiting || !UpdateService.IsNewer(update.LatestVersion, UpdateService.CurrentVersion) || _notifiedUpdate == update.TagName) return;
+            _notifiedUpdate = update.TagName;
+            var message = Loc.Language switch
+            {
+                "en" => $"Update {update.TagName} is available. Open Settings → Updates to install.",
+                "sv" => $"Uppdatering {update.TagName} finns. Installera via Inställningar → Uppdateringar.",
+                "de" => $"Update {update.TagName} verfügbar. Installation unter Einstellungen → Updates.",
+                _ => $"Päivitys {update.TagName} on saatavilla. Asenna kohdasta Asetukset → Päivitykset.",
+            };
+            _trayIcon.ShowBalloonTip(10000, Loc.T("app.name"), message, ToolTipIcon.Info);
         }
-        catch (Exception ex)
-        {
-            AppLogger.Log($"VAROITUS: kuvasynkronoinnin kaynnistys epaonnistui: {ex.Message}");
-        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+        catch (Exception ex) { AppLogger.Log($"Update check failed: {ex.Message}"); }
+        finally { _checkingUpdate = false; }
     }
 
     private void OnWatcherActivityChanged(WatcherActivitySnapshot snapshot)
     {
+        if (_exiting || _uiThreadSync.IsDisposed) return;
         if (_uiThreadSync.InvokeRequired)
         {
             _uiThreadSync.BeginInvoke(new Action(() => UpdateStatusText(snapshot.StatusText)));
@@ -205,8 +244,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             Loc.Language = _config.Language;
             _configService.Save(_config);
             RefreshLocalizedUi();
-            _ = StartWatcherAsync();
-            _ = StartPhotoSyncAsync();
+            _ = RestartServicesAsync(_config);
         }
         else if (forceOpen && !_config.IsConfigured)
         {
@@ -242,9 +280,14 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private async Task ExitApplicationAsync()
     {
+        if (_exiting) return;
+        _exiting = true;
+        _updateTimer.Stop(); _updateTimer.Dispose(); _shutdown.Cancel();
         _trayIcon.Visible = false;
-        await _watcher.StopAsync();
-        await _photoSync.StopAsync();
+        await _restartGate.WaitAsync();
+        try { await _watcher.StopAsync(); await _photoSync.StopAsync(); }
+        finally { _restartGate.Release(); }
+        _activityPanel?.Close();
         _trayIcon.Dispose();
         _uiThreadSync.Dispose();
         Application.Exit();

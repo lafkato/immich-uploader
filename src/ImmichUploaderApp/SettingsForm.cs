@@ -651,6 +651,11 @@ public sealed class SettingsForm : Form
         _suppressTreeCheckEvents = true;
         try
         {
+            if (e.Node.Tag is string changedPath)
+            {
+                _originalExcludeSet.RemoveWhere(p => string.Equals(p, changedPath, StringComparison.OrdinalIgnoreCase) || p.StartsWith(changedPath.TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+                if (!e.Node.Checked) _originalExcludeSet.Add(changedPath);
+            }
             SetDescendantsChecked(e.Node, e.Node.Checked);
         }
         finally
@@ -722,6 +727,13 @@ public sealed class SettingsForm : Form
         }
     }
 
+    private List<string> BuildExclusions()
+    {
+        var results = _originalExcludeSet.Where(p => _directories.Any(d => p.StartsWith(d.TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))).ToList();
+        foreach (TreeNode node in _treeExclusions.Nodes) CollectUncheckedPaths(node, results);
+        return results.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     private void OnSaveClicked(object? sender, EventArgs e)
     {
         var serverUrl = _txtServerUrl.Text.Trim();
@@ -774,11 +786,7 @@ public sealed class SettingsForm : Form
             }
         }
 
-        var excludeDirectories = new List<string>();
-        foreach (TreeNode rootNode in _treeExclusions.Nodes)
-        {
-            CollectUncheckedPaths(rootNode, excludeDirectories);
-        }
+        var excludeDirectories = BuildExclusions();
 
         var theme = _cmbTheme.SelectedIndex switch { 1 => "Light", 2 => "Dark", _ => "System" };
         var languageIndex = Math.Max(0, _cmbLanguage.SelectedIndex);
@@ -792,7 +800,7 @@ public sealed class SettingsForm : Form
             DeviceName = string.IsNullOrWhiteSpace(_txtDeviceName.Text) ? Environment.MachineName : _txtDeviceName.Text.Trim(),
             DeviceId = _initialConfig.DeviceId,
             Directories = _directories.ToList(),
-            ExcludeDirectories = excludeDirectories,
+            ExcludeDirectories = excludeDirectories.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             Theme = theme,
             Language = language,
             SyncEnabled = _chkSyncEnabled.Checked,

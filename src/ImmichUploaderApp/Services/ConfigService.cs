@@ -5,6 +5,21 @@ namespace ImmichUploaderApp.Services;
 
 public sealed class ConfigService
 {
+    public static string GetScopedStatePath(AppConfig config, string fileName, string? stateRoot = null)
+    {
+        var root = stateRoot ?? StateDir;
+        var identity = ImmichClient.NormalizeServerUrl(config.ServerUrl).ToLowerInvariant() + "\n" + config.ApiKey;
+        var scope = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(identity)));
+        var folder = Path.Combine(root, "accounts", scope);
+        Directory.CreateDirectory(folder);
+        var marker = Path.Combine(root, "legacy-account.txt");
+        if (!File.Exists(marker)) File.WriteAllText(marker, scope);
+        var path = Path.Combine(folder, fileName);
+        var legacy = Path.Combine(root, fileName);
+        if (File.ReadAllText(marker) == scope && !File.Exists(path) && File.Exists(legacy)) File.Copy(legacy, path);
+        return path;
+    }
+
     private static readonly string StateDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".immich-uploader");
 

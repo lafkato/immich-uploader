@@ -36,6 +36,9 @@ public sealed class UploadWatcherService : IDisposable
     private Channel<string>? _queue;
     private CancellationTokenSource? _cts;
     private Task? _consumerTask;
+    private Task _safetyTask = Task.CompletedTask;
+    private readonly object _scanLock = new();
+    private bool _stopping;
     private Timer? _safetyPollTimer;
     private AppConfig _config = new();
     private ImmichClient? _client;
@@ -49,9 +52,11 @@ public sealed class UploadWatcherService : IDisposable
     /// history is shared with PhotoSyncService when provided, so files it downloads (marked
     /// known there) are never picked up here as "new" local files and re-uploaded - the same
     /// store, not just the same schema, is what makes that safe.
-    public UploadWatcherService(UploadHistoryStore? history = null)
+    private readonly string _recentActivityPath;
+    public UploadWatcherService(UploadHistoryStore? history = null, string? recentActivityPath = null)
     {
         _history = history ?? new();
+        _recentActivityPath = recentActivityPath ?? ConfigService.UploadRecentActivityPath;
         LoadRecentActivity();
     }
 
@@ -63,8 +68,8 @@ public sealed class UploadWatcherService : IDisposable
     {
         try
         {
-            if (!File.Exists(ConfigService.UploadRecentActivityPath)) return;
-            var data = JsonSerializer.Deserialize<RecentActivityData>(File.ReadAllText(ConfigService.UploadRecentActivityPath));
+            if (!File.Exists(_recentActivityPath)) return;
+            var data = JsonSerializer.Deserialize<RecentActivityData>(File.ReadAllText(_recentActivityPath));
             if (data is null) return;
             if (data.Uploads is not null) _recentUploads.AddRange(data.Uploads);
             if (data.Failures is not null) _recentFailures.AddRange(data.Failures);
@@ -76,11 +81,11 @@ public sealed class UploadWatcherService : IDisposable
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(ConfigService.UploadRecentActivityPath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(_recentActivityPath)!);
             var json = JsonSerializer.Serialize(new RecentActivityData(_recentUploads, _recentFailures));
-            var tempPath = ConfigService.UploadRecentActivityPath + ".tmp";
+            var tempPath = _recentActivityPath + ".tmp";
             File.WriteAllText(tempPath, json);
-            File.Move(tempPath, ConfigService.UploadRecentActivityPath, overwrite: true);
+            File.Move(tempPath, _recentActivityPath, overwrite: true);
         }
         catch (Exception ex) { AppLogger.Log($"VAROITUS: viimeisimpien latausten tallennus epaonnistui: {ex.Message}"); }
     }
@@ -117,14 +122,14 @@ public sealed class UploadWatcherService : IDisposable
         catch (Exception ex) { AppLogger.Log($"VAROITUS: tallennustilan haku epaonnistui: {ex.Message}"); return null; }
     }
 
-    public async Task StartAsync(AppConfig config)
+    public async Task StartAsync(AppConfig config, CancellationToken shutdown = default)
     {
         await _lifecycleGate.WaitAsync();
         try
         {
             await StopCoreAsync();
             _config = config;
-            _cts = new CancellationTokenSource();
+            lock (_scanLock) { _cts = CancellationTokenSource.CreateLinkedTokenSource(shutdown); _stopping = false; }
             _queue = Channel.CreateBounded<string>(new BoundedChannelOptions(QueueCapacity) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
             _paused = false;
             _client = new ImmichClient(config.ServerUrl, config.ApiKey);
@@ -135,7 +140,7 @@ public sealed class UploadWatcherService : IDisposable
             foreach (var dir in config.Directories) TryEnsureWatcher(dir);
             _consumerTask = Task.Run(() => ConsumeQueueAsync(_queue.Reader, _cts.Token));
             _safetyPollTimer = new Timer(_ => _ = SafetyPollTickAsync(), null, TimeSpan.Zero, SafetyPollInterval);
-            _ = RetryPendingAlbumsAsync(_cts.Token);
+
             AppLogger.Log($"=== Kaynnistys === Tarkkaillaan: {string.Join(", ", config.Directories)}");
             RaiseActivity(Loc.T("status.idle"));
         }
@@ -151,7 +156,7 @@ public sealed class UploadWatcherService : IDisposable
 
     private async Task StopCoreAsync()
     {
-        _safetyPollTimer?.Dispose(); _safetyPollTimer = null;
+        lock (_scanLock) { _stopping = true; _safetyPollTimer?.Dispose(); _safetyPollTimer = null; }
         lock (_debounceLock) { foreach (var timer in _debounceTimers.Values) timer.Dispose(); _debounceTimers.Clear(); }
         foreach (var watcher in _watchers.Values) watcher.Dispose();
         _watchers.Clear();
@@ -159,6 +164,7 @@ public sealed class UploadWatcherService : IDisposable
         if (_cts is not null)
         {
             _cts.Cancel();
+            await _safetyTask;
             if (_consumerTask is not null) try { await _consumerTask; } catch (OperationCanceledException) { }
             _cts.Dispose();
         }
@@ -233,10 +239,20 @@ public sealed class UploadWatcherService : IDisposable
         return false;
     }
 
-    private async Task SafetyPollTickAsync()
+    private Task SafetyPollTickAsync()
+    {
+        lock (_scanLock)
+        {
+            if (_stopping || !IsRunning) return Task.CompletedTask;
+            if (!_safetyTask.IsCompleted) return _safetyTask;
+            var ct = _cts!.Token;
+            return _safetyTask = Task.Run(() => SafetyPollCoreAsync(ct));
+        }
+    }
+
+    private async Task SafetyPollCoreAsync(CancellationToken ct)
     {
         if (_paused || !IsRunning || Interlocked.CompareExchange(ref _safetyScanRunning, 1, 0) != 0) return;
-        var ct = _cts!.Token;
         try
         {
             foreach (var dir in _config.Directories)
@@ -297,6 +313,8 @@ public sealed class UploadWatcherService : IDisposable
         if (quickInfo.Exists && _history.TryGetUploadedHash(path, quickInfo, out _)) return;
         var info = await WaitForStableFileAsync(path, ct);
         if (_history.TryGetUploadedHash(path, info, out _)) return;
+        if (!string.IsNullOrWhiteSpace(_config.AlbumName) && _albumId is null)
+            _albumId = await _client.EnsureAlbumAsync(_config.AlbumName, ct);
         var sha1 = await UploadHistoryStore.ComputeSha1Async(path, ct);
         info.Refresh();
         if (!info.Exists || info.Length == 0) throw new FileNotReadyException();

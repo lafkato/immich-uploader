@@ -35,7 +35,7 @@
 - Albumin valinta, kansioiden poissulku sekä Windowsin käynnistyksen yhteydessä avautuminen
 - Päällekkäisten latausten esto, tiedoston valmiustarkistus ja automaattiset uudelleenyritykset
 - Suomen, englannin, ruotsin ja saksan kielet sekä vaalea/tumma ulkoasu
-- Manuaalinen päivitystarkastus ja -asennus suoraan asetuksista
+- Automaattinen päivitystarkastus käynnistyessä ja kuuden tunnin välein; päivityksen asennus asetuksista
 - API-avain suojataan Windowsin DPAPI-salauksella
 
 ### Kuvien ja videoiden lataus Immichistä
@@ -93,7 +93,7 @@ Sovellus tallentaa asetukset ja lataushistorian Windows-käyttäjäprofiiliisi. 
 - Album selection, folder exclusions, and optional start with Windows
 - Duplicate prevention, file-stability checks, and automatic retries
 - Finnish, English, Swedish, and German interfaces with light and dark themes
-- Manual update check and one-click install from Settings
+- Automatic update checks at startup and every six hours; install updates from Settings
 - Your API key is protected with Windows DPAPI encryption
 
 ### Downloading photos and videos from Immich

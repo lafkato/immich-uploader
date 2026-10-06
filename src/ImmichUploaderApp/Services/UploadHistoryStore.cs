@@ -10,7 +10,8 @@ public sealed class UploadHistoryStore
     private readonly List<PendingAlbumEntry> _pendingAlbumEntries = new();
     private readonly object _lock = new();
 
-    public UploadHistoryStore() => Load();
+    private readonly string _path;
+    public UploadHistoryStore(string? path = null) { _path = path ?? ConfigService.UploadHistoryPath; Load(); }
 
     public static async Task<string> ComputeSha1Async(string filePath, CancellationToken ct = default)
     {
@@ -88,9 +89,9 @@ public sealed class UploadHistoryStore
     {
         try
         {
-            if (File.Exists(ConfigService.UploadHistoryPath))
+            if (File.Exists(_path))
             {
-                var data = JsonSerializer.Deserialize<HistoryData>(File.ReadAllText(ConfigService.UploadHistoryPath)) ?? new HistoryData();
+                var data = JsonSerializer.Deserialize<HistoryData>(File.ReadAllText(_path)) ?? new HistoryData();
                 foreach (var hash in data.UploadedHashes) _uploadedHashes.Add(hash);
                 foreach (var entry in data.Files) _files[entry.Path] = new FileEntry(entry.Hash, entry.Length, entry.LastWriteUtcTicks);
                 _pendingAlbumEntries.AddRange(data.PendingAlbums);
@@ -98,7 +99,7 @@ public sealed class UploadHistoryStore
             }
 
             // One-time migration of the old append-only log.
-            if (File.Exists(ConfigService.UploadedLogPath))
+            if (_path == ConfigService.UploadHistoryPath && File.Exists(ConfigService.UploadedLogPath))
                 foreach (var line in File.ReadLines(ConfigService.UploadedLogPath))
                 {
                     var hash = line.Split('\t')[0].Trim();
@@ -111,16 +112,16 @@ public sealed class UploadHistoryStore
 
     private void SaveLocked()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(ConfigService.UploadHistoryPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         var data = new HistoryData
         {
             UploadedHashes = _uploadedHashes.OrderBy(x => x, StringComparer.Ordinal).ToList(),
             Files = _files.Select(x => new StoredFileEntry(x.Key, x.Value.Hash, x.Value.Length, x.Value.LastWriteUtcTicks)).ToList(),
             PendingAlbums = _pendingAlbumEntries.ToList(),
         };
-        var tempPath = ConfigService.UploadHistoryPath + ".tmp";
+        var tempPath = _path + ".tmp";
         File.WriteAllText(tempPath, JsonSerializer.Serialize(data));
-        File.Move(tempPath, ConfigService.UploadHistoryPath, overwrite: true);
+        File.Move(tempPath, _path, overwrite: true);
     }
 
     private sealed class HistoryData

@@ -28,7 +28,13 @@ public sealed class PhotoSyncService : IDisposable
         ["de"] = new CultureInfo("de-DE"),
     };
 
-    private readonly SyncManifestStore _manifest = new();
+    private readonly SyncManifestStore _manifest;
+    private readonly object _runLock = new();
+    private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private Task _scanTask = Task.CompletedTask, _deletionTask = Task.CompletedTask;
+    private bool _stopping;
+    private readonly string _recentActivityPath;
+    private readonly Func<AppConfig, ImmichClient> _clientFactory;
     private readonly UploadHistoryStore _uploadHistory;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly object _activityLock = new();
@@ -48,9 +54,12 @@ public sealed class PhotoSyncService : IDisposable
     /// uploadHistory is shared with UploadWatcherService when provided: every file downloaded
     /// here gets marked "known" in it, so it's never re-uploaded even if the sync and watched
     /// folders overlap - see UploadWatcherService's matching constructor comment.
-    public PhotoSyncService(UploadHistoryStore? uploadHistory = null)
+    public PhotoSyncService(UploadHistoryStore? uploadHistory = null, SyncManifestStore? manifest = null, string? recentActivityPath = null, Func<AppConfig, ImmichClient>? clientFactory = null)
     {
         _uploadHistory = uploadHistory ?? new();
+        _manifest = manifest ?? new();
+        _clientFactory = clientFactory ?? (c => new ImmichClient(c.ServerUrl, c.ApiKey));
+        _recentActivityPath = recentActivityPath ?? ConfigService.SyncRecentActivityPath;
         LoadRecentActivity();
     }
 
@@ -62,8 +71,8 @@ public sealed class PhotoSyncService : IDisposable
     {
         try
         {
-            if (!File.Exists(ConfigService.SyncRecentActivityPath)) return;
-            var data = JsonSerializer.Deserialize<RecentActivityData>(File.ReadAllText(ConfigService.SyncRecentActivityPath));
+            if (!File.Exists(_recentActivityPath)) return;
+            var data = JsonSerializer.Deserialize<RecentActivityData>(File.ReadAllText(_recentActivityPath));
             if (data is null) return;
             if (data.Downloads is not null) _recentDownloads.AddRange(data.Downloads);
             if (data.Deletions is not null) _recentDeletions.AddRange(data.Deletions);
@@ -75,11 +84,11 @@ public sealed class PhotoSyncService : IDisposable
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(ConfigService.SyncRecentActivityPath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(_recentActivityPath)!);
             var json = JsonSerializer.Serialize(new RecentActivityData(_recentDownloads, _recentDeletions));
-            var tempPath = ConfigService.SyncRecentActivityPath + ".tmp";
+            var tempPath = _recentActivityPath + ".tmp";
             File.WriteAllText(tempPath, json);
-            File.Move(tempPath, ConfigService.SyncRecentActivityPath, overwrite: true);
+            File.Move(tempPath, _recentActivityPath, overwrite: true);
         }
         catch (Exception ex) { AppLogger.Log($"VAROITUS: viimeisimpien latausten tallennus epaonnistui: {ex.Message}"); }
     }
@@ -115,7 +124,7 @@ public sealed class PhotoSyncService : IDisposable
         }
     }
 
-    public async Task StartAsync(AppConfig config)
+    public async Task StartAsync(AppConfig config, CancellationToken shutdown = default)
     {
         await _lifecycleGate.WaitAsync();
         try
@@ -125,8 +134,8 @@ public sealed class PhotoSyncService : IDisposable
             if (!config.SyncEnabled) return;
             if (string.IsNullOrWhiteSpace(config.SyncPhotoFolder) && string.IsNullOrWhiteSpace(config.SyncVideoFolder)) return;
 
-            _cts = new CancellationTokenSource();
-            _client = new ImmichClient(config.ServerUrl, config.ApiKey);
+            lock (_runLock) { _cts = CancellationTokenSource.CreateLinkedTokenSource(shutdown); _stopping = false; }
+            _client = _clientFactory(config);
             _timer = new Timer(_ => _ = ScanTickAsync(), null, TimeSpan.Zero, ScanInterval);
             // Staggered start (not TimeSpan.Zero) so it doesn't immediately duplicate work the
             // full scan's own first tick is already about to do.
@@ -143,35 +152,75 @@ public sealed class PhotoSyncService : IDisposable
         finally { _lifecycleGate.Release(); }
     }
 
-    private Task StopCoreAsync()
+    private async Task StopCoreAsync()
     {
-        _timer?.Dispose(); _timer = null;
-        _localDeletionTimer?.Dispose(); _localDeletionTimer = null;
-        _cts?.Cancel(); _cts?.Dispose(); _cts = null;
+        Task scan, deletion;
+        lock (_runLock)
+        {
+            _stopping = true;
+            _timer?.Dispose(); _timer = null;
+            _localDeletionTimer?.Dispose(); _localDeletionTimer = null;
+            _cts?.Cancel();
+            scan = _scanTask; deletion = _deletionTask;
+        }
+        await Task.WhenAll(scan, deletion);
+        _cts?.Dispose(); _cts = null;
         _client?.Dispose(); _client = null;
-        return Task.CompletedTask;
+    }
+
+    private Task ScanTickAsync() => RunTick(false);
+    private Task LocalDeletionCheckTickAsync() => RunTick(true);
+    private Task RunTick(bool deletion)
+    {
+        lock (_runLock)
+        {
+            if (_stopping || !IsRunning || _client is null) return Task.CompletedTask;
+            if (deletion)
+            {
+                if (!_deletionTask.IsCompleted) return _deletionTask;
+                var ct = _cts!.Token;
+                return _deletionTask = Task.Run(() => RunSerializedAsync(true, ct));
+            }
+            if (!_scanTask.IsCompleted) return _scanTask;
+            var scanCt = _cts!.Token;
+            return _scanTask = Task.Run(() => RunSerializedAsync(false, scanCt));
+        }
+    }
+    private async Task RunSerializedAsync(bool deletion, CancellationToken ct)
+    {
+        try
+        {
+            await _operationGate.WaitAsync(ct);
+            try
+            {
+                if (deletion) await LocalDeletionCheckCoreAsync(ct);
+                else await ScanCoreAsync(ct);
+            }
+            finally { _operationGate.Release(); }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
     }
 
     public void ScanNow() => _ = ScanTickAsync();
 
-    private async Task LocalDeletionCheckTickAsync()
+    private async Task LocalDeletionCheckCoreAsync(CancellationToken ct)
     {
         if (!IsRunning || _client is null || Interlocked.CompareExchange(ref _localCheckRunning, 1, 0) != 0) return;
-        try { await ReconcileLocalDeletionsAsync(_cts!.Token); }
+        try { await ReconcileLocalDeletionsAsync(ct); }
         catch (OperationCanceledException) { }
         catch (Exception ex) { AppLogger.Log($"VIRHE paikallisten poistojen tarkistuksessa: {ex.Message}"); }
         finally { Interlocked.Exchange(ref _localCheckRunning, 0); }
     }
 
-    private async Task ScanTickAsync()
+    private async Task ScanCoreAsync(CancellationToken ct)
     {
         if (!IsRunning || _client is null || Interlocked.CompareExchange(ref _scanRunning, 1, 0) != 0) return;
-        var ct = _cts!.Token;
         try
         {
             RaiseActivity(Loc.T("sync.scanning"));
             _albumNamesByAssetId = _config.SyncOrganizeByAlbum ? await BuildAlbumMembershipAsync(ct) : new Dictionary<string, List<string>>();
 
+            await ReconcileLocalDeletionsAsync(ct);
             var remoteIds = new HashSet<string>();
             int pageNumber = 1, downloaded = 0;
             while (true)
@@ -261,6 +310,8 @@ public sealed class PhotoSyncService : IDisposable
     /// Returns true if at least one new local copy was downloaded/placed for this asset.
     private async Task<bool> SyncAssetAsync(AssetSummary asset, CancellationToken ct)
     {
+        var root = asset.Type == "VIDEO" ? _config.SyncVideoFolder : _config.SyncPhotoFolder;
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return false;
         var wantedPaths = BuildDestinationPaths(asset);
         if (wantedPaths.Count == 0) return false; // no folder configured for this asset's type
 
@@ -272,6 +323,9 @@ public sealed class PhotoSyncService : IDisposable
         var effectiveMode = asset.Type == "VIDEO" ? "Original" : _config.SyncMode;
 
         var hasEntry = _manifest.TryGet(asset.Id, out var entry);
+        if (hasEntry && (entry.LocallyDeleted || entry.PendingRemoteTrash)) return false;
+        if (hasEntry) wantedPaths = wantedPaths.Except(entry.SuppressedPaths, StringComparer.OrdinalIgnoreCase).ToList();
+        if (wantedPaths.Count == 0) return false;
         var previousPaths = hasEntry ? entry.LocalPaths : new List<string>();
 
         if (hasEntry && entry.Mode != effectiveMode)
@@ -339,7 +393,7 @@ public sealed class PhotoSyncService : IDisposable
             catch (Exception ex) { AppLogger.Log($"VAROITUS: kopiointi '{extra}' epaonnistui: {ex.Message}"); }
         }
 
-        _manifest.Set(asset.Id, new SyncManifestEntry(finalPaths, effectiveMode, DateTime.UtcNow));
+        _manifest.Set(asset.Id, new SyncManifestEntry(finalPaths, effectiveMode, DateTime.UtcNow) { SuppressedPaths = entry?.SuppressedPaths ?? new() });
         await RecordDownloadAsync(firstPath, asset, ct);
         return true;
     }
@@ -494,16 +548,17 @@ public sealed class PhotoSyncService : IDisposable
     {
         foreach (var (assetId, entry) in _manifest.GetAll())
         {
-            if (remoteIds.Contains(assetId)) continue;
+            if (remoteIds.Contains(assetId) || !CanInspectPaths(entry.LocalPaths)) continue;
 
             // No longer on the Immich side (deleted there, or trashed by us on a previous scan)
             // - drop every local copy too.
+            var removed = true;
             foreach (var path in entry.LocalPaths)
             {
-                TryDeleteFile(path);
-                RecordDeletion(Path.GetFileName(path), Loc.T("sync.deletedFromImmich"));
+                if (TryDeleteFile(path)) RecordDeletion(Path.GetFileName(path), Loc.T("sync.deletedFromImmich"));
+                else removed = false;
             }
-            _manifest.Remove(assetId);
+            if (removed) _manifest.Remove(assetId);
         }
     }
 
@@ -517,15 +572,18 @@ public sealed class PhotoSyncService : IDisposable
         var toTrashRemotely = new List<(string AssetId, string FileName)>();
         foreach (var (assetId, entry) in _manifest.GetAll())
         {
+            ct.ThrowIfCancellationRequested();
+            if (entry.LocalPaths.Count == 0 || !CanInspectPaths(entry.LocalPaths)) continue;
+            if (entry.LocallyDeleted && !entry.PendingRemoteTrash) continue;
             var survivingPaths = entry.LocalPaths.Where(File.Exists).ToList();
             if (survivingPaths.Count == entry.LocalPaths.Count) continue; // nothing missing
 
             if (survivingPaths.Count == 0)
             {
                 // The user deleted every mirrored copy of this asset.
-                _manifest.Remove(assetId);
+                _manifest.Set(assetId, entry with { LocallyDeleted = true, PendingRemoteTrash = entry.PendingRemoteTrash || _config.SyncDeleteRemoteOnLocalDelete });
                 var fileName = Path.GetFileName(entry.LocalPaths[0]);
-                if (_config.SyncDeleteRemoteOnLocalDelete) toTrashRemotely.Add((assetId, fileName));
+                if (entry.PendingRemoteTrash || _config.SyncDeleteRemoteOnLocalDelete) toTrashRemotely.Add((assetId, fileName));
                 else RecordDeletion(fileName, Loc.T("sync.deletedLocallyOnly"));
             }
             else
@@ -533,7 +591,7 @@ public sealed class PhotoSyncService : IDisposable
                 // Deleted from some locations (e.g. one album folder) but not others - keep
                 // tracking what's left, don't resurrect the deleted copy, don't trash remotely
                 // since a copy still exists.
-                _manifest.Set(assetId, entry with { LocalPaths = survivingPaths });
+                _manifest.Set(assetId, entry with { LocalPaths = survivingPaths, SuppressedPaths = entry.SuppressedPaths.Concat(entry.LocalPaths.Except(survivingPaths, StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList() });
             }
         }
 
@@ -541,8 +599,13 @@ public sealed class PhotoSyncService : IDisposable
         try
         {
             await _client!.TrashAssetsAsync(toTrashRemotely.Select(x => x.AssetId), ct);
-            foreach (var (_, fileName) in toTrashRemotely) RecordDeletion(fileName, Loc.T("sync.deletedLocallyAndTrashed"));
+            foreach (var (assetId, fileName) in toTrashRemotely)
+            {
+                if (_manifest.TryGet(assetId, out var entry)) _manifest.Set(assetId, entry with { PendingRemoteTrash = false });
+                RecordDeletion(fileName, Loc.T("sync.deletedLocallyAndTrashed"));
+            }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             AppLogger.Log($"VAROITUS: roskakoriin siirto epaonnistui: {ex.Message}");
@@ -550,11 +613,32 @@ public sealed class PhotoSyncService : IDisposable
         }
     }
 
-    private static void TryDeleteFile(string path)
+    private bool CanInspectPaths(IEnumerable<string> paths)
     {
-        try { if (File.Exists(path)) File.Delete(path); }
-        catch (Exception ex) { AppLogger.Log($"VAROITUS: tiedoston '{path}' poisto epaonnistui: {ex.Message}"); }
+        var roots = new[] { _config.SyncPhotoFolder, _config.SyncVideoFolder }.Where(r => !string.IsNullOrWhiteSpace(r)).ToArray();
+        foreach (var path in paths)
+        {
+            var root = roots.FirstOrDefault(r => Path.GetFullPath(path).StartsWith(Path.GetFullPath(r).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+            if (root is null || !Directory.Exists(root)) return false;
+            try
+            {
+                _ = Directory.EnumerateFileSystemEntries(root).Take(1).ToArray();
+                var parent = Path.GetDirectoryName(path)!;
+                if (Directory.Exists(parent)) _ = Directory.EnumerateFileSystemEntries(parent).Take(1).ToArray();
+                try { _ = File.GetAttributes(path); }
+                catch (FileNotFoundException) { }
+                catch (DirectoryNotFoundException) { }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        }
+        return true;
     }
 
-    public void Dispose() { StopAsync().GetAwaiter().GetResult(); _lifecycleGate.Dispose(); }
+    private static bool TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); return true; }
+        catch (Exception ex) { AppLogger.Log($"VAROITUS: tiedoston '{path}' poisto epaonnistui: {ex.Message}"); return false; }
+    }
+
+    public void Dispose() { StopAsync().GetAwaiter().GetResult(); _lifecycleGate.Dispose(); _operationGate.Dispose(); }
 }

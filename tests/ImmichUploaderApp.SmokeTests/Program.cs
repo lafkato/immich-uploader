@@ -41,6 +41,8 @@ Check(!UpdateService.IsNewer(new Version(1, 0, 2), new Version(1, 0, 2)), "1.0.2
 Check(!UpdateService.IsNewer(new Version(1, 0, 2), new Version(1, 0, 2, 0)), "3-part tag version vs 4-part assembly version compares equal, not older");
 Check(UpdateService.IsNewer(new Version(2, 0, 0), new Version(1, 9, 9)), "Major version bump is newer");
 
+await RegressionTests.RunAsync(Check);
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine("Smoke tests failed: " + string.Join("; ", failures));
