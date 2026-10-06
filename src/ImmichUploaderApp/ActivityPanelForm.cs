@@ -401,12 +401,12 @@ public sealed class ActivityPanelForm : Form
     }
 
     /// PictureBox doesn't dispose an Image assigned via its Image property when the control
-    /// itself is disposed (Controls.Clear() disposes the controls, not their images) - without
+    /// itself is disposed (Controls.Clear() does not dispose controls or their images) - without
     /// this, every re-render (a scan tick, a new upload, a Settings save...) leaks a GDI bitmap
     /// per visible thumbnail, and the panel gets progressively choppier to scroll over time.
     private void ClearActivityRows()
     {
-        foreach (Control control in _recentList.Controls)
+        foreach (Control control in _recentList.Controls.Cast<Control>().ToArray())
         {
             foreach (Control child in control.Controls)
             {
@@ -416,6 +416,7 @@ public sealed class ActivityPanelForm : Form
                     image.Dispose();
                 }
             }
+            control.Dispose();
         }
         _recentList.Controls.Clear();
     }
@@ -534,7 +535,7 @@ public sealed class ActivityPanelForm : Form
     {
         try
         {
-            var path = !string.IsNullOrEmpty(fullPath) ? fullPath : await Task.Run(() => FindByName(fileName));
+            var path = !string.IsNullOrEmpty(fullPath) && File.Exists(fullPath) ? fullPath : await Task.Run(() => FindByName(fileName));
             if (path is null) { AppLogger.Log($"VAROITUS: tiedostoa '{fileName}' ei loydy avattavaksi."); return; }
             OpenFile(path);
         }

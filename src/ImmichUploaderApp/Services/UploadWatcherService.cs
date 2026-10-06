@@ -188,6 +188,7 @@ public sealed class UploadWatcherService : IDisposable
                 InternalBufferSize = 64 * 1024, EnableRaisingEvents = true,
             };
             watcher.Created += (_, e) => OnFileEvent(e.FullPath);
+            watcher.Changed += (_, e) => OnFileEvent(e.FullPath);
             watcher.Renamed += (_, e) => OnFileEvent(e.FullPath);
             watcher.Error += (_, e) => { AppLogger.Log($"VAROITUS: FileSystemWatcher '{dir}' menetti tapahtumia: {e.GetException()?.Message}"); RecordFailure(dir, "Kansiotarkkailu palautetaan täysskannauksella.", true); ScanNow(); };
             _watchers[dir] = watcher;
@@ -197,7 +198,7 @@ public sealed class UploadWatcherService : IDisposable
 
     private void OnFileEvent(string fullPath)
     {
-        if (_paused || !IsRunning) return;
+        if (_paused || !IsRunning || !IsCandidate(fullPath)) return;
         lock (_debounceLock)
         {
             if (_debounceTimers.TryGetValue(fullPath, out var existing)) { existing.Change(DebounceDelay, Timeout.InfiniteTimeSpan); return; }
@@ -214,6 +215,12 @@ public sealed class UploadWatcherService : IDisposable
     private void Enqueue(string fullPath)
     {
         if (!IsRunning || !IsCandidate(fullPath) || _paused) return;
+        try
+        {
+            var info = new FileInfo(fullPath);
+            if (!info.Exists || _history.TryGetUploadedHash(fullPath, info, out _)) return;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
         var queue = _queue;
         if (queue is null) return;
         lock (_queueLock)
@@ -274,7 +281,7 @@ public sealed class UploadWatcherService : IDisposable
         while (stack.TryPop(out var current))
         {
             IEnumerable<string> subDirs; IEnumerable<string> files;
-            try { subDirs = Directory.EnumerateDirectories(current); files = Directory.EnumerateFiles(current); }
+            try { subDirs = Directory.GetDirectories(current); files = Directory.GetFiles(current); }
             catch { continue; }
             foreach (var file in files) yield return file;
             foreach (var subDir in subDirs) if (!IsExcluded(subDir + Path.DirectorySeparatorChar)) stack.Push(subDir);

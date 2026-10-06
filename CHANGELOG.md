@@ -1,3 +1,21 @@
+# v1.2.5
+
+## Suomi
+
+- Tarkkaillaan myös olemassa olevien kuvien ja videoiden muutoksia, jotta niiden käsittely käynnistyy heti.
+- Ohitetaan jo ladatut muuttumattomat tiedostot ennen latausjonoon lisäämistä.
+- Jatketaan skannausta, vaikka yksi alikansio poistuu tai sen lukeminen epäonnistuu.
+- Vapautetaan toimintalistan vanhat käyttöliittymäelementit uudelleenpiirrossa.
+- Etsitään kuva nykyisistä kansioista, jos toimintalistaan tallennettu polku ei enää ole olemassa.
+
+## English
+
+- React to changes to existing photos and videos, and skip unchanged uploads before queuing.
+- Continue scanning when an individual folder disappears or cannot be read.
+- Dispose removed activity-row controls and retry filename lookup when a stored path is stale.
+
+Validation: Release build and regressions for filesystem change events, known-file queue filtering, disappearing folders, and activity-row disposal.
+
 # v1.2.4
 
 ## Suomi

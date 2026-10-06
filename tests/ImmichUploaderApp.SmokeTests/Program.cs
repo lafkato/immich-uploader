@@ -45,6 +45,7 @@ Check(UpdateService.IsNewer(new Version(2, 0, 0), new Version(1, 9, 9)), "Major 
 
 await RegressionTests.RunAsync(Check);
 await UpdateDownloadTests.RunAsync(Check);
+ScannerRegressionTests.Run(Check);
 
 if (failures.Count > 0)
 {

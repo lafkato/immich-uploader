@@ -108,6 +108,14 @@ internal static class RegressionTests
                     using var form = new SettingsForm(new AppConfig { Directories = new() { watched }, ExcludeDirectories = new() { deep } });
                     var exclusions = (List<string>)typeof(SettingsForm).GetMethod("BuildExclusions", Private)!.Invoke(form, null)!;
                     check(exclusions.Contains(deep), "Saving unexpanded exclusion tree preserves deep exclusions");
+                    using var panelWatcher = new UploadWatcherService(new UploadHistoryStore(Path.Combine(root, "panel-history.json")), Path.Combine(root, "panel-upload.json"));
+                    using var panelSync = new PhotoSyncService(new UploadHistoryStore(Path.Combine(root, "panel-history-2.json")), new SyncManifestStore(Path.Combine(root, "panel-manifest.json")), Path.Combine(root, "panel-download.json"));
+                    using var panel = new ActivityPanelForm(panelWatcher, panelSync, new AppConfig(), () => { });
+                    var row = (Control)typeof(ActivityPanelForm).GetMethod("BuildActivityRow", Private)!.Invoke(panel, new object?[] { "photo.jpg", DateTime.Now, null, null, 300 })!;
+                    var list = (Control)typeof(ActivityPanelForm).GetField("_recentList", Private)!.GetValue(panel)!;
+                    list.Controls.Add(row);
+                    typeof(ActivityPanelForm).GetMethod("ClearActivityRows", Private)!.Invoke(panel, null);
+                    check(row.IsDisposed && row.Controls.Count == 0, "Activity list redraw disposes removed row controls");
                 }
                 catch (Exception ex) { uiError = ex; }
             });
